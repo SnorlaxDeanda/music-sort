@@ -11,16 +11,24 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
 from . import __version__
-from .cleaner import FileResult, scan_music_folder, summarize
+from .cleaner import ScanReport, scan_music_folder, summarize
 
 
 class AlbumArtistCleanerApp:
-    def __init__(self, root: tk.Tk, *, initial_folder: str | None = None, dry_run: bool = False):
+    def __init__(
+        self,
+        root: tk.Tk,
+        *,
+        initial_folder: str | None = None,
+        dry_run: bool = False,
+        remove_duplicates: bool = True,
+    ):
         self.root = root
         self.root.title("Album Artist Cleaner")
-        self.root.minsize(720, 520)
+        self.root.minsize(720, 540)
         self.folder_var = tk.StringVar(value=initial_folder or "")
         self.dry_run_var = tk.BooleanVar(value=dry_run)
+        self.remove_duplicates_var = tk.BooleanVar(value=remove_duplicates)
         self.progress_var = tk.DoubleVar(value=0.0)
         self.progress_text_var = tk.StringVar(value="Idle")
         self._busy = False
@@ -75,7 +83,7 @@ class AlbumArtistCleanerApp:
             frame,
             text=(
                 "Choose a music library folder (artist → album → mp3). "
-                "Album Artist tags like “Artist A featuring Artist B” become “Artist A”."
+                "Cleans Album Artist featuring credits and deletes duplicate songs."
             ),
             wraplength=660,
         )
@@ -93,10 +101,17 @@ class AlbumArtistCleanerApp:
         options.pack(fill=tk.X, **pad)
         self.dry_run_check = ttk.Checkbutton(
             options,
-            text="Dry run (preview only — do not write tags)",
+            text="Dry run (preview only — do not write tags or delete files)",
             variable=self.dry_run_var,
         )
-        self.dry_run_check.pack(side=tk.LEFT)
+        self.dry_run_check.pack(anchor=tk.W)
+
+        self.duplicates_check = ttk.Checkbutton(
+            options,
+            text="Delete duplicate songs (keep one copy)",
+            variable=self.remove_duplicates_var,
+        )
+        self.duplicates_check.pack(anchor=tk.W, pady=(4, 0))
 
         actions = ttk.Frame(frame)
         actions.pack(fill=tk.X, **pad)
@@ -136,9 +151,8 @@ class AlbumArtistCleanerApp:
             "About Album Artist Cleaner",
             (
                 f"Album Artist Cleaner {__version__}\n\n"
-                "Scans artist → album → mp3 folders and rewrites Album Artist "
-                "ID3 tags that include featuring credits.\n\n"
-                "Only the Album Artist tag is changed."
+                "Scans artist → album → mp3 folders, rewrites Album Artist "
+                "ID3 tags that include featuring credits, and deletes duplicate songs."
             ),
         )
 
@@ -176,6 +190,7 @@ class AlbumArtistCleanerApp:
         self.browse_button.configure(state=state)
         self.folder_entry.configure(state=state)
         self.dry_run_check.configure(state=state)
+        self.duplicates_check.configure(state=state)
 
     def _set_progress(self, current: int, total: int, path: Path | None = None) -> None:
         if total <= 0:
@@ -204,6 +219,14 @@ class AlbumArtistCleanerApp:
             return
 
         dry_run = self.dry_run_var.get()
+        remove_duplicates = self.remove_duplicates_var.get()
+        if remove_duplicates and not dry_run:
+            if not messagebox.askyesno(
+                "Delete duplicates?",
+                "Duplicate songs will be permanently deleted (one copy kept).\n\nContinue?",
+            ):
+                return
+
         self._clear_log()
         self.progress_var.set(0.0)
         self.progress_text_var.set("Scanning for MP3 files…")
@@ -212,18 +235,23 @@ class AlbumArtistCleanerApp:
 
         thread = threading.Thread(
             target=self._worker,
-            args=(path, dry_run),
+            args=(path, dry_run, remove_duplicates),
             daemon=True,
         )
         thread.start()
 
-    def _worker(self, path: Path, dry_run: bool) -> None:
+    def _worker(self, path: Path, dry_run: bool, remove_duplicates: bool) -> None:
         try:
             def on_progress(current: int, total: int, file_path: Path) -> None:
                 self._event_queue.put(("progress", (current, total, file_path)))
 
-            results = scan_music_folder(path, dry_run=dry_run, on_progress=on_progress)
-            self._event_queue.put(("done", (results, dry_run)))
+            report = scan_music_folder(
+                path,
+                dry_run=dry_run,
+                on_progress=on_progress,
+                remove_duplicates=remove_duplicates,
+            )
+            self._event_queue.put(("done", (report, dry_run)))
         except Exception as exc:  # noqa: BLE001
             self._event_queue.put(("error", str(exc)))
 
@@ -235,8 +263,8 @@ class AlbumArtistCleanerApp:
                     current, total, file_path = payload
                     self._set_progress(current, total, file_path)
                 elif kind == "done":
-                    results, dry_run = payload
-                    self._finish(results, dry_run=dry_run)
+                    report, dry_run = payload
+                    self._finish(report, dry_run=dry_run)
                 elif kind == "error":
                     messagebox.showerror("Scan failed", payload)
                     self.progress_text_var.set("Failed")
@@ -246,11 +274,11 @@ class AlbumArtistCleanerApp:
             pass
         self.root.after(50, self._poll_events)
 
-    def _finish(self, results: list[FileResult], *, dry_run: bool) -> None:
-        total = len(results)
-        self._set_progress(total, total)
+    def _finish(self, report: ScanReport, *, dry_run: bool) -> None:
+        total = report.files_scanned
+        self._set_progress(max(total, 1), max(total, 1))
 
-        for result in results:
+        for result in report.tag_results:
             if result.error:
                 self._append_log(f"ERROR  {result.path}: {result.error}")
             elif result.changed:
@@ -258,10 +286,19 @@ class AlbumArtistCleanerApp:
                 self._append_log(f"{prefix}  {result.path}")
                 self._append_log(f'  "{result.original}" -> "{result.cleaned}"')
 
-        stats = summarize(results)
+        for result in report.delete_results:
+            if result.error:
+                self._append_log(f"ERROR  {result.path}: {result.error}")
+            else:
+                prefix = "WOULD DELETE" if dry_run else "DELETED"
+                self._append_log(f"{prefix}  {result.path}")
+                self._append_log(f"  duplicate of {result.kept}")
+
+        stats = summarize(report)
         mode = "Dry run" if dry_run else "Done"
         summary = (
             f"{mode}: {stats['changed']} changed, "
+            f"{stats['deleted']} deleted, "
             f"{stats['skipped']} unchanged, "
             f"{stats['errors']} errors "
             f"({stats['total']} files)"
@@ -276,33 +313,39 @@ class AlbumArtistCleanerApp:
         self._set_busy(False)
 
 
-def run_gui(*, initial_folder: str | None = None, dry_run: bool = False) -> int:
+def run_gui(
+    *,
+    initial_folder: str | None = None,
+    dry_run: bool = False,
+    remove_duplicates: bool = True,
+) -> int:
     root = tk.Tk()
     try:
         root.tk.call("tk", "scaling", 1.25)
     except tk.TclError:
         pass
 
-    # Helps the process show up under the app name in Activity Monitor / Dock when
-    # launched from the .app bundle.
     try:
         root.wm_attributes("-titlepath", "Album Artist Cleaner")
     except tk.TclError:
         pass
 
-    AlbumArtistCleanerApp(root, initial_folder=initial_folder, dry_run=dry_run)
+    AlbumArtistCleanerApp(
+        root,
+        initial_folder=initial_folder,
+        dry_run=dry_run,
+        remove_duplicates=remove_duplicates,
+    )
 
     if sys.platform == "darwin":
         try:
-            # Wire the standard macOS About menu item when available.
             root.createcommand(
                 "tkAboutDialog",
                 lambda: messagebox.showinfo(
                     "About Album Artist Cleaner",
                     (
                         f"Album Artist Cleaner {__version__}\n\n"
-                        "Scans artist → album → mp3 folders and rewrites Album Artist "
-                        "ID3 tags that include featuring credits."
+                        "Cleans Album Artist featuring credits and deletes duplicate songs."
                     ),
                 ),
             )

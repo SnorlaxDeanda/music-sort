@@ -2,6 +2,7 @@
 
 from .cleaner import (
     FEATURE_PATTERN,
+    ScanReport,
     clean_album_artist,
     list_mp3_files,
     process_file,
@@ -10,10 +11,11 @@ from .cleaner import (
 
 __all__ = [
     "FEATURE_PATTERN",
+    "ScanReport",
     "clean_album_artist",
     "list_mp3_files",
     "process_file",
     "scan_music_folder",
 ]
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"

@@ -1,4 +1,4 @@
-"""Tests for album artist cleaning logic and MP3 rewriting."""
+"""Tests for album artist cleaning logic and duplicate deletion."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 from mutagen.easyid3 import EasyID3
-from mutagen.id3 import ID3, TIT2, TPE1, TPE2
+from mutagen.id3 import ID3, TALB, TIT2, TPE1, TPE2
 
 from album_artist_cleaner.cleaner import (
     clean_album_artist,
@@ -41,20 +41,30 @@ def test_clean_album_artist(raw, expected):
     assert clean_album_artist(raw) == expected
 
 
-def _write_tagged_mp3(path: Path, album_artist: str) -> None:
-    """Create a file with ID3 tags (no real audio needed for mutagen tag I/O)."""
-    path.write_bytes(b"\x00" * 64)
+def _write_tagged_mp3(
+    path: Path,
+    *,
+    album_artist: str,
+    title: str | None = None,
+    album: str | None = None,
+    artist: str | None = None,
+    payload: bytes | None = None,
+) -> None:
+    """Create a file with ID3 tags (unique bytes so content-hash differs)."""
+    unique = payload if payload is not None else f"{path}\n".encode()
+    path.write_bytes(unique.ljust(64, b"\0"))
     tags = ID3()
     tags.add(TPE2(encoding=3, text=[album_artist]))
-    tags.add(TPE1(encoding=3, text=["Ignored Artist"]))
-    tags.add(TIT2(encoding=3, text=[path.stem]))
+    tags.add(TPE1(encoding=3, text=[artist or "Ignored Artist"]))
+    tags.add(TIT2(encoding=3, text=[title or path.stem]))
+    tags.add(TALB(encoding=3, text=[album or path.parent.name]))
     tags.save(path)
 
 
 def test_process_file_rewrites_album_artist(tmp_path: Path):
     mp3 = tmp_path / "Artist A" / "Album" / "track.mp3"
     mp3.parent.mkdir(parents=True)
-    _write_tagged_mp3(mp3, "Artist A featuring Artist B")
+    _write_tagged_mp3(mp3, album_artist="Artist A featuring Artist B")
 
     result = process_file(mp3, dry_run=False)
 
@@ -68,7 +78,7 @@ def test_process_file_rewrites_album_artist(tmp_path: Path):
 
 def test_process_file_dry_run_does_not_write(tmp_path: Path):
     mp3 = tmp_path / "track.mp3"
-    _write_tagged_mp3(mp3, "Artist A feat. Artist B")
+    _write_tagged_mp3(mp3, album_artist="Artist A feat. Artist B")
 
     result = process_file(mp3, dry_run=True)
     assert result.changed is True
@@ -86,14 +96,15 @@ def test_scan_music_folder(tmp_path: Path):
         (c, "Local Natives"),
     ):
         path.parent.mkdir(parents=True, exist_ok=True)
-        _write_tagged_mp3(path, album_artist)
+        _write_tagged_mp3(path, album_artist=album_artist)
 
-    results = scan_music_folder(library, dry_run=False)
-    stats = summarize(results)
+    report = scan_music_folder(library, dry_run=False, remove_duplicates=False)
+    stats = summarize(report)
 
     assert stats["total"] == 3
     assert stats["changed"] == 2
     assert stats["skipped"] == 1
+    assert stats["deleted"] == 0
     assert EasyID3(a)["albumartist"] == ["Drake"]
     assert EasyID3(b)["albumartist"] == ["SZA"]
     assert EasyID3(c)["albumartist"] == ["Local Natives"]
@@ -101,7 +112,7 @@ def test_scan_music_folder(tmp_path: Path):
 
 def test_process_file_skips_when_no_feature(tmp_path: Path):
     mp3 = tmp_path / "song.mp3"
-    _write_tagged_mp3(mp3, "Solo Artist")
+    _write_tagged_mp3(mp3, album_artist="Solo Artist")
 
     result = process_file(mp3)
     assert result.changed is False
@@ -114,7 +125,7 @@ def test_scan_music_folder_progress_callback(tmp_path: Path):
     for name in ("a.mp3", "b.mp3", "c.mp3"):
         path = library / "Artist" / "Album" / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        _write_tagged_mp3(path, "Artist featuring Guest")
+        _write_tagged_mp3(path, album_artist="Artist featuring Guest", title=name)
         paths.append(path)
 
     seen: list[tuple[int, int, Path]] = []
@@ -122,9 +133,85 @@ def test_scan_music_folder_progress_callback(tmp_path: Path):
     def on_progress(current: int, total: int, path: Path) -> None:
         seen.append((current, total, path))
 
-    results = scan_music_folder(library, dry_run=True, on_progress=on_progress)
+    report = scan_music_folder(
+        library,
+        dry_run=True,
+        on_progress=on_progress,
+        remove_duplicates=False,
+    )
 
-    assert len(results) == 3
+    assert len(report.tag_results) == 3
     assert [item[0] for item in seen] == [1, 2, 3]
     assert all(item[1] == 3 for item in seen)
     assert [item[2] for item in seen] == sorted(paths)
+
+
+def test_deletes_duplicate_songs_by_tags(tmp_path: Path):
+    library = tmp_path / "Music"
+    keep = library / "Artist" / "Album" / "Song.mp3"
+    dup = library / "Artist" / "Album" / "Song (1).mp3"
+    other = library / "Artist" / "Album" / "Other Song.mp3"
+    for path in (keep, dup, other):
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+    _write_tagged_mp3(
+        keep,
+        album_artist="Artist",
+        title="Song",
+        album="Album",
+        payload=b"keep-audio",
+    )
+    _write_tagged_mp3(
+        dup,
+        album_artist="Artist",
+        title="Song",
+        album="Album",
+        payload=b"dup-audio",
+    )
+    _write_tagged_mp3(
+        other,
+        album_artist="Artist",
+        title="Other Song",
+        album="Album",
+        payload=b"other-audio",
+    )
+
+    report = scan_music_folder(library, dry_run=False, remove_duplicates=True)
+    stats = summarize(report)
+
+    assert stats["deleted"] == 1
+    assert keep.exists()
+    assert other.exists()
+    assert not dup.exists()
+    assert report.delete_results[0].kept == keep
+    assert report.delete_results[0].path == dup
+
+
+def test_deletes_identical_file_copies(tmp_path: Path):
+    import shutil
+
+    library = tmp_path / "Music"
+    a = library / "A" / "Alb" / "one.mp3"
+    b = library / "B" / "Alb" / "two.mp3"
+    for path in (a, b):
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+    _write_tagged_mp3(a, album_artist="A", title="One", album="Alb", payload=b"exact-same-bytes")
+    shutil.copy2(a, b)
+
+    report = scan_music_folder(library, dry_run=False, remove_duplicates=True)
+    assert summarize(report)["deleted"] == 1
+    assert a.exists() != b.exists()
+
+
+def test_dry_run_does_not_delete_duplicates(tmp_path: Path):
+    library = tmp_path / "Music"
+    a = library / "Artist" / "Album" / "Song.mp3"
+    b = library / "Artist" / "Album" / "Song copy.mp3"
+    for path in (a, b):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_tagged_mp3(path, album_artist="Artist", title="Song", album="Album", payload=str(path).encode())
+
+    report = scan_music_folder(library, dry_run=True, remove_duplicates=True)
+    assert summarize(report)["deleted"] == 1
+    assert a.exists() and b.exists()

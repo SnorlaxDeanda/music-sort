@@ -10,6 +10,11 @@ Artist/
 
 For each MP3, if the **Album Artist** ID3 tag looks like a featuring credit, it is rewritten to the primary artist only.
 
+It also **deletes duplicate songs**, keeping one preferred copy. Duplicates are detected when:
+
+- the same song identity matches (album artist/artist + album + title), including names like `Song (1).mp3` / `Song copy.mp3`
+- or two files are byte-for-byte identical
+
 | Before | After |
 | --- | --- |
 | `Artist A featuring Artist B` | `Artist A` |
@@ -42,7 +47,8 @@ If macOS blocks the app: right-click → **Open** → **Open**.
 ### In the app
 
 - Browse to your music folder
-- Optionally enable **Dry run** to preview changes
+- Optionally enable **Dry run** to preview tag changes and deletions
+- Keep **Delete duplicate songs** checked to remove extras (one copy kept)
 - Click **Scan & Clean**
 - Watch the **progress bar** and activity log
 
@@ -66,8 +72,9 @@ python clean_album_artists.py --gui
 ## Safety tips
 
 - Run with **Dry run** first.
-- Keep a backup of your library (or work on a copy) before rewriting tags in bulk.
+- Keep a backup of your library (or work on a copy) before rewriting tags or deleting duplicates.
 - Only `.mp3` files are processed.
+- Duplicate deletion keeps the preferred file (better tags / non-copy name / larger size).
 
 ## Tests
 
