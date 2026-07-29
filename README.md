@@ -40,7 +40,8 @@ chmod +x scripts/build_macos_app.sh
 First launch installs a private Python environment under  
 `~/Library/Application Support/Album Artist Cleaner/`.
 
-**Requirement:** Python 3.10+ with Tk support (python.org installer or Homebrew `python-tk`).
+**Requirement:** Python 3.10+ (from [python.org](https://www.python.org/downloads/) or Homebrew).  
+The app uses a **native macOS Cocoa UI** and does **not** need Tk/`python-tk`.
 
 If macOS blocks the app: right-click → **Open** → **Open**.
 

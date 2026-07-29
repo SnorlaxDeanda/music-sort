@@ -313,7 +313,7 @@ class AlbumArtistCleanerApp:
         self._set_busy(False)
 
 
-def run_gui(
+def run_tk_gui(
     *,
     initial_folder: str | None = None,
     dry_run: bool = False,
@@ -354,3 +354,38 @@ def run_gui(
 
     root.mainloop()
     return 0
+
+
+def run_gui(
+    *,
+    initial_folder: str | None = None,
+    dry_run: bool = False,
+    remove_duplicates: bool = True,
+) -> int:
+    """Prefer native Cocoa on macOS so Tk is not required."""
+    if sys.platform == "darwin":
+        try:
+            from .cocoa_gui import run_cocoa_gui
+
+            return run_cocoa_gui(
+                initial_folder=initial_folder,
+                dry_run=dry_run,
+                remove_duplicates=remove_duplicates,
+            )
+        except ImportError:
+            pass
+
+    try:
+        return run_tk_gui(
+            initial_folder=initial_folder,
+            dry_run=dry_run,
+            remove_duplicates=remove_duplicates,
+        )
+    except ModuleNotFoundError as exc:
+        if "tkinter" not in str(exc) and exc.name not in {"tkinter", "_tkinter"}:
+            raise
+        raise SystemExit(
+            "No GUI backend available. On macOS install dependencies with:\n"
+            "  pip install pyobjc-framework-Cocoa\n"
+            "Or install Python Tk support (brew install python-tk)."
+        ) from exc
