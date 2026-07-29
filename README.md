@@ -1,6 +1,6 @@
 # Album Artist Cleaner
 
-macOS-friendly tool that scans a music library folder structured as:
+A **macOS application** that scans a music library folder structured as:
 
 ```text
 Artist/
@@ -20,31 +20,33 @@ For each MP3, if the **Album Artist** ID3 tag looks like a featuring credit, it 
 
 Tags without a featuring-style credit are left alone. The track **Artist** tag is not modified.
 
-## Requirements
+## Install (macOS app)
 
-- macOS (or any OS with Python 3.10+)
-- Python 3
-
-## Quick start (macOS)
-
-1. Open Terminal in this folder.
-2. Make the launcher executable once:
+1. Build (or refresh) the app bundle from this repo:
 
 ```bash
-chmod +x run_album_artist_cleaner.command
+chmod +x scripts/build_macos_app.sh
+./scripts/build_macos_app.sh
 ```
 
-3. Double-click `run_album_artist_cleaner.command` in Finder, **or** run:
+2. In Finder, open **`Album Artist Cleaner.app`**.
+3. Optional: drag it into **Applications**.
 
-```bash
-./run_album_artist_cleaner.command
-```
+First launch installs a private Python environment under  
+`~/Library/Application Support/Album Artist Cleaner/`.
 
-The first launch creates a local virtualenv and installs `mutagen`. A simple window opens so you can pick your music folder.
+**Requirement:** Python 3.10+ with Tk support (python.org installer or Homebrew `python-tk`).
 
-Check **Dry run** first to preview changes without writing tags. The window shows a **progress bar** while files are processed.
+If macOS blocks the app: right-click → **Open** → **Open**.
 
-## Command line
+### In the app
+
+- Browse to your music folder
+- Optionally enable **Dry run** to preview changes
+- Click **Scan & Clean**
+- Watch the **progress bar** and activity log
+
+## Command line (optional)
 
 ```bash
 python3 -m venv .venv
@@ -57,13 +59,13 @@ python clean_album_artists.py "/path/to/Music" --dry-run
 # Apply changes
 python clean_album_artists.py "/path/to/Music"
 
-# Open GUI
+# Open the GUI without the .app wrapper
 python clean_album_artists.py --gui
 ```
 
 ## Safety tips
 
-- Run with `--dry-run` / the Dry run checkbox first.
+- Run with **Dry run** first.
 - Keep a backup of your library (or work on a copy) before rewriting tags in bulk.
 - Only `.mp3` files are processed.
 
@@ -72,4 +74,10 @@ python clean_album_artists.py --gui
 ```bash
 pip install -r requirements.txt pytest
 pytest -q
+```
+
+## Rebuild the app after code changes
+
+```bash
+./scripts/build_macos_app.sh
 ```
