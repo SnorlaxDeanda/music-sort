@@ -42,7 +42,7 @@ chmod +x run_album_artist_cleaner.command
 
 The first launch creates a local virtualenv and installs `mutagen`. A simple window opens so you can pick your music folder.
 
-Check **Dry run** first to preview changes without writing tags.
+Check **Dry run** first to preview changes without writing tags. The window shows a **progress bar** while files are processed.
 
 ## Command line
 

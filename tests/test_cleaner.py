@@ -106,3 +106,25 @@ def test_process_file_skips_when_no_feature(tmp_path: Path):
     result = process_file(mp3)
     assert result.changed is False
     assert result.skipped is True
+
+
+def test_scan_music_folder_progress_callback(tmp_path: Path):
+    library = tmp_path / "Music"
+    paths = []
+    for name in ("a.mp3", "b.mp3", "c.mp3"):
+        path = library / "Artist" / "Album" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_tagged_mp3(path, "Artist featuring Guest")
+        paths.append(path)
+
+    seen: list[tuple[int, int, Path]] = []
+
+    def on_progress(current: int, total: int, path: Path) -> None:
+        seen.append((current, total, path))
+
+    results = scan_music_folder(library, dry_run=True, on_progress=on_progress)
+
+    assert len(results) == 3
+    assert [item[0] for item in seen] == [1, 2, 3]
+    assert all(item[1] == 3 for item in seen)
+    assert [item[2] for item in seen] == sorted(paths)

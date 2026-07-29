@@ -5,10 +5,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
+from typing import Optional
 
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, ID3NoHeaderError
+
+ProgressCallback = Callable[[int, int, Path], None]
 
 # Matches common "featuring" forms used in album/artist credits.
 # Examples matched:
@@ -80,6 +83,14 @@ def _iter_mp3_files(root: Path) -> Iterator[Path]:
     for path in sorted(root.rglob("*")):
         if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS:
             yield path
+
+
+def list_mp3_files(root: Path | str) -> list[Path]:
+    """Return sorted MP3 paths under a music folder."""
+    root_path = Path(root).expanduser().resolve()
+    if not root_path.is_dir():
+        raise NotADirectoryError(f"Not a directory: {root_path}")
+    return list(_iter_mp3_files(root_path))
 
 
 def _read_album_artist(path: Path) -> str | None:
@@ -156,20 +167,25 @@ def scan_music_folder(
     root: Path | str,
     *,
     dry_run: bool = False,
+    on_progress: Optional[ProgressCallback] = None,
 ) -> list[FileResult]:
     """
     Scan a music library folder (artist > album > mp3) and clean Album Artist tags.
 
     Only MP3 files are processed. Nested depth is not enforced so slight
     variations in folder layout still work.
-    """
-    root_path = Path(root).expanduser().resolve()
-    if not root_path.is_dir():
-        raise NotADirectoryError(f"Not a directory: {root_path}")
 
+    If ``on_progress`` is provided it is called as
+    ``on_progress(current_index, total, path)`` after each file is processed
+    (``current_index`` is 1-based).
+    """
+    files = list_mp3_files(root)
+    total = len(files)
     results: list[FileResult] = []
-    for path in _iter_mp3_files(root_path):
+    for index, path in enumerate(files, start=1):
         results.append(process_file(path, dry_run=dry_run))
+        if on_progress is not None:
+            on_progress(index, total, path)
     return results
 
 

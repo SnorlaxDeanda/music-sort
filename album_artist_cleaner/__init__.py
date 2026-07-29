@@ -3,6 +3,7 @@
 from .cleaner import (
     FEATURE_PATTERN,
     clean_album_artist,
+    list_mp3_files,
     process_file,
     scan_music_folder,
 )
@@ -10,6 +11,7 @@ from .cleaner import (
 __all__ = [
     "FEATURE_PATTERN",
     "clean_album_artist",
+    "list_mp3_files",
     "process_file",
     "scan_music_folder",
 ]
