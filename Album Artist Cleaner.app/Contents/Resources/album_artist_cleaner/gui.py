@@ -51,11 +51,11 @@ class AlbumArtistCleanerApp:
         menubar = tk.Menu(self.root)
 
         file_menu = tk.Menu(menubar, tearoff=0)
-        file_menu.add_command(label="Open Music Folder…", accelerator="⌘O", command=self._browse)
+        file_menu.add_command(label="Open Music Folder…", accelerator="Command-O", command=self._browse)
         file_menu.add_separator()
-        file_menu.add_command(label="Scan & Clean", accelerator="⌘R", command=self._run)
+        file_menu.add_command(label="Scan & Clean", accelerator="Command-R", command=self._run)
         file_menu.add_separator()
-        file_menu.add_command(label="Quit", accelerator="⌘Q", command=self._quit)
+        file_menu.add_command(label="Quit", accelerator="Command-Q", command=self._quit)
         menubar.add_cascade(label="File", menu=file_menu)
 
         help_menu = tk.Menu(menubar, tearoff=0)
@@ -72,11 +72,7 @@ class AlbumArtistCleanerApp:
         frame = ttk.Frame(self.root, padding=20)
         frame.pack(fill=tk.BOTH, expand=True)
 
-        title = ttk.Label(
-            frame,
-            text="Album Artist Cleaner",
-            font=("Helvetica", 22, "bold"),
-        )
+        title = ttk.Label(frame, text="Album Artist Cleaner", font=("Helvetica", 22, "bold"))
         title.pack(anchor=tk.W)
 
         subtitle = ttk.Label(
@@ -151,17 +147,13 @@ class AlbumArtistCleanerApp:
             "About Album Artist Cleaner",
             (
                 f"Album Artist Cleaner {__version__}\n\n"
-                "Scans artist → album → mp3 folders, rewrites Album Artist "
-                "ID3 tags that include featuring credits, and deletes duplicate songs."
+                "Cleans Album Artist featuring credits and deletes duplicate songs."
             ),
         )
 
     def _quit(self) -> None:
         if self._busy:
-            if not messagebox.askyesno(
-                "Quit",
-                "A scan is still running. Quit anyway?",
-            ):
+            if not messagebox.askyesno("Quit", "A scan is still running. Quit anyway?"):
                 return
         self.root.destroy()
 
@@ -197,9 +189,7 @@ class AlbumArtistCleanerApp:
             self.progress_var.set(100.0)
             self.progress_text_var.set("No MP3 files found")
             return
-
-        percent = (current / total) * 100.0
-        self.progress_var.set(percent)
+        self.progress_var.set((current / total) * 100.0)
         name = path.name if path is not None else ""
         suffix = f" — {name}" if name else ""
         self.progress_text_var.set(f"Processing {current} of {total}{suffix}")
@@ -207,12 +197,10 @@ class AlbumArtistCleanerApp:
     def _run(self) -> None:
         if self._busy:
             return
-
         folder = self.folder_var.get().strip()
         if not folder:
             messagebox.showwarning("Missing folder", "Choose a music folder first.")
             return
-
         path = Path(folder)
         if not path.is_dir():
             messagebox.showerror("Invalid folder", f"Not a directory:\n{path}")
@@ -232,13 +220,11 @@ class AlbumArtistCleanerApp:
         self.progress_text_var.set("Scanning for MP3 files…")
         self.status.configure(text="Working…")
         self._set_busy(True)
-
-        thread = threading.Thread(
+        threading.Thread(
             target=self._worker,
             args=(path, dry_run, remove_duplicates),
             daemon=True,
-        )
-        thread.start()
+        ).start()
 
     def _worker(self, path: Path, dry_run: bool, remove_duplicates: bool) -> None:
         try:
@@ -305,28 +291,23 @@ class AlbumArtistCleanerApp:
         )
         self._append_log("")
         self._append_log(summary)
-        if total == 0:
-            self.progress_text_var.set("No MP3 files found")
-        else:
-            self.progress_text_var.set(f"Finished — {total} file{'s' if total != 1 else ''}")
+        self.progress_text_var.set(
+            "No MP3 files found" if total == 0 else f"Finished — {total} file{'s' if total != 1 else ''}"
+        )
         self.status.configure(text=summary)
         self._set_busy(False)
 
 
-def run_tk_gui(
+def run_gui(
     *,
     initial_folder: str | None = None,
     dry_run: bool = False,
     remove_duplicates: bool = True,
 ) -> int:
+    # Bundled runtime includes Tcl/Tk — use Tk directly (no PyObjC / system Tk needed).
     root = tk.Tk()
     try:
         root.tk.call("tk", "scaling", 1.25)
-    except tk.TclError:
-        pass
-
-    try:
-        root.wm_attributes("-titlepath", "Album Artist Cleaner")
     except tk.TclError:
         pass
 
@@ -352,40 +333,9 @@ def run_tk_gui(
         except tk.TclError:
             pass
 
+    root.lift()
+    root.attributes("-topmost", True)
+    root.after(200, lambda: root.attributes("-topmost", False))
+    root.focus_force()
     root.mainloop()
     return 0
-
-
-def run_gui(
-    *,
-    initial_folder: str | None = None,
-    dry_run: bool = False,
-    remove_duplicates: bool = True,
-) -> int:
-    """Prefer native Cocoa on macOS so Tk is not required."""
-    if sys.platform == "darwin":
-        try:
-            from .cocoa_gui import run_cocoa_gui
-
-            return run_cocoa_gui(
-                initial_folder=initial_folder,
-                dry_run=dry_run,
-                remove_duplicates=remove_duplicates,
-            )
-        except ImportError:
-            pass
-
-    try:
-        return run_tk_gui(
-            initial_folder=initial_folder,
-            dry_run=dry_run,
-            remove_duplicates=remove_duplicates,
-        )
-    except ModuleNotFoundError as exc:
-        if "tkinter" not in str(exc) and exc.name not in {"tkinter", "_tkinter"}:
-            raise
-        raise SystemExit(
-            "No GUI backend available. On macOS install dependencies with:\n"
-            "  pip install pyobjc-framework-Cocoa\n"
-            "Or install Python Tk support (brew install python-tk)."
-        ) from exc

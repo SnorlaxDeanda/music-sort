@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -44,6 +45,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not delete duplicate songs.",
     )
+    parser.add_argument(
+        "--json-progress",
+        action="store_true",
+        help="Emit JSON lines for progress/events (used by the macOS app UI).",
+    )
     return parser
 
 
@@ -80,9 +86,93 @@ def print_results(report: ScanReport, *, quiet: bool = False, dry_run: bool = Fa
     return 1 if stats["errors"] else 0
 
 
+def emit(event: dict) -> None:
+    sys.stdout.write(json.dumps(event, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def run_json_progress(
+    folder: Path,
+    *,
+    dry_run: bool,
+    remove_duplicates: bool,
+) -> int:
+    def on_progress(current: int, total: int, path: Path) -> None:
+        emit(
+            {
+                "type": "progress",
+                "current": current,
+                "total": total,
+                "path": str(path),
+                "name": path.name,
+            }
+        )
+
+    try:
+        report = scan_music_folder(
+            folder,
+            dry_run=dry_run,
+            on_progress=on_progress,
+            remove_duplicates=remove_duplicates,
+        )
+    except NotADirectoryError as exc:
+        emit({"type": "error", "message": str(exc)})
+        return 2
+    except Exception as exc:  # noqa: BLE001
+        emit({"type": "error", "message": str(exc)})
+        return 1
+
+    events: list[dict] = []
+    for result in report.tag_results:
+        if result.error:
+            events.append({"kind": "error", "path": str(result.path), "message": result.error})
+        elif result.changed:
+            events.append(
+                {
+                    "kind": "change",
+                    "path": str(result.path),
+                    "original": result.original,
+                    "cleaned": result.cleaned,
+                }
+            )
+
+    for result in report.delete_results:
+        if result.error:
+            events.append({"kind": "error", "path": str(result.path), "message": result.error})
+        else:
+            events.append(
+                {
+                    "kind": "delete",
+                    "path": str(result.path),
+                    "kept": str(result.kept),
+                }
+            )
+
+    stats = summarize(report)
+    emit(
+        {
+            "type": "done",
+            "dry_run": dry_run,
+            "stats": stats,
+            "events": events,
+        }
+    )
+    return 1 if stats["errors"] else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.json_progress:
+        if not args.folder:
+            emit({"type": "error", "message": "folder is required with --json-progress"})
+            return 2
+        return run_json_progress(
+            Path(args.folder),
+            dry_run=args.dry_run,
+            remove_duplicates=not args.keep_duplicates,
+        )
 
     if args.gui or not args.folder:
         from .gui import run_gui

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Assemble a fully self-contained "Album Artist Cleaner.app".
-# The finished .app includes its own Python runtime + dependencies.
-# Running the app requires no Homebrew, system Python, Tk, or internet.
+# The finished .app includes its own Python+Tk runtime + dependencies.
+# Running the app requires no Homebrew, system Python, or internet.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -17,7 +17,6 @@ RUNTIME_VERSION="cpython-3.12.13+20260728"
 
 mkdir -p "$MACOS" "$RESOURCES" "$PACKS"
 
-# Copy application payload into the bundle.
 rm -rf "$RESOURCES/album_artist_cleaner"
 cp -R "$ROOT/album_artist_cleaner" "$RESOURCES/album_artist_cleaner"
 cp "$ROOT/clean_album_artists.py" "$RESOURCES/clean_album_artists.py"
@@ -25,19 +24,26 @@ cp "$ROOT/requirements-macos.txt" "$RESOURCES/requirements-macos.txt"
 find "$RESOURCES/album_artist_cleaner" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$RESOURCES" -type f -name '*.pyc' -delete
 
+# Keep a tiny native UI helper for fallback dialogs if needed.
+cat > "$RESOURCES/run_worker.py" <<'PY'
+from album_artist_cleaner.cli import main
+raise SystemExit(main())
+PY
+
 trim_runtime() {
   local python_root="$1"
-  # Drop developer tooling and caches that are not needed at runtime.
+  # Keep tkinter — the app GUI uses the bundled Tcl/Tk.
   rm -rf \
     "$python_root/lib/python3.12/test" \
-    "$python_root/lib/python3.12/tkinter" \
     "$python_root/lib/python3.12/idlelib" \
     "$python_root/lib/python3.12/turtledemo" \
     "$python_root/lib/python3.12/ensurepip" \
     "$python_root/lib/python3.12/lib2to3" \
     "$python_root/lib/python3.12/config-3.12"* \
-    "$python_root/share" \
     "$python_root/include" 2>/dev/null || true
+  # PyObjC ships bulky test/debug symbols we do not need.
+  rm -rf "$python_root/lib/python3.12/site-packages/PyObjCTest" 2>/dev/null || true
+  find "$python_root" -type d -name '*.dSYM' -prune -exec rm -rf {} +
   find "$python_root" -type d -name '__pycache__' -prune -exec rm -rf {} +
   find "$python_root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 }
@@ -68,8 +74,9 @@ build_pack_for_arch() {
     return 1
   fi
 
+  # mutagen only — GUI uses bundled Tk, not PyObjC.
   python3 -m pip download \
-    -r "$ROOT/requirements-macos.txt" \
+    mutagen \
     -d "$wheelhouse" \
     --only-binary=:all: \
     --python-version 312 \
@@ -92,21 +99,23 @@ build_pack_for_arch() {
   echo "Wrote $pack ($(du -h "$pack" | awk '{print $1}'))"
 }
 
-# Runtime packs are required — the app must not depend on external downloads.
 rm -rf "$PACKS"
 mkdir -p "$PACKS"
 build_pack_for_arch aarch64
 build_pack_for_arch x86_64
 
-# Also expand into Resources/runtime for machines that can write inside the bundle.
-# The launcher prefers these paths when present; otherwise it extracts the packs
-# into Application Support (still from files shipped inside the .app).
 rm -rf "$RESOURCES/runtime"
 mkdir -p "$RESOURCES/runtime"
 for arch in aarch64 x86_64; do
   mkdir -p "$RESOURCES/runtime/$arch"
   tar -xzf "$PACKS/${arch}.tar.gz" -C "$RESOURCES/runtime/$arch"
 done
+
+# requirements used only for reference now
+cat > "$RESOURCES/requirements-macos.txt" <<'REQ'
+mutagen>=1.47.0
+REQ
+cp "$RESOURCES/requirements-macos.txt" "$ROOT/requirements-macos.txt"
 
 cat > "$CONTENTS/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -128,9 +137,9 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.4.0</string>
+	<string>1.5.0</string>
 	<key>CFBundleVersion</key>
-	<string>4</string>
+	<string>5</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.music</string>
 	<key>LSMinimumSystemVersion</key>
@@ -143,11 +152,9 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# Canonical no-build-required launcher (runtime packs are already inside the .app).
 cat > "$MACOS/AlbumArtistCleaner" <<'LAUNCHER'
 #!/bin/bash
-# Self-contained launcher. Uses only the runtime shipped inside this .app.
-# Does not require Homebrew, system Python, Tk, internet, or a build step.
+# Self-contained launcher. No Homebrew / system Python / internet required.
 set -euo pipefail
 
 APP_NAME="Album Artist Cleaner"
@@ -155,19 +162,16 @@ RUNTIME_VERSION="cpython-3.12.13+20260728"
 
 notify() {
   local message="$1"
-  if command -v osascript >/dev/null 2>&1; then
-    osascript -e "display notification \"$(printf '%s' "$message" | sed 's/"/\\"/g')\" with title \"$APP_NAME\"" \
-      >/dev/null 2>&1 || true
-  fi
+  /usr/bin/osascript -e "display notification \"$(printf '%s' "$message" | sed 's/"/\\"/g')\" with title \"$APP_NAME\"" \
+    >/dev/null 2>&1 || true
 }
 
 abort() {
   local message="$1"
   local escaped
   escaped="$(printf '%s' "$message" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-  if command -v osascript >/dev/null 2>&1; then
-    osascript -e "display alert \"$APP_NAME\" message \"$escaped\" as critical" >/dev/null 2>&1 || true
-  fi
+  /usr/bin/osascript -e "display alert \"$APP_NAME\" message \"$escaped\" as critical" \
+    >/dev/null 2>&1 || true
   echo "$message" >&2
   exit 1
 }
@@ -180,25 +184,40 @@ arch_key() {
   esac
 }
 
-deps_ok() {
+clear_quarantine() {
+  local target="$1"
+  if [[ -e "$target" ]]; then
+    /usr/bin/xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
+  fi
+}
+
+runtime_ok() {
   local python_bin="$1"
+  # Must be able to import mutagen and tkinter from the bundled runtime.
   "$python_bin" - <<'PY' >/dev/null 2>&1
 import mutagen
-import AppKit
-import PyObjCTools
+import tkinter
 PY
 }
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 RESOURCES="$(cd "$HERE/../Resources" && pwd)"
+APP_ROOT="$(cd "$HERE/../.." && pwd)"
 SUPPORT="${HOME}/Library/Application Support/Album Artist Cleaner"
 LOG_DIR="$SUPPORT/Logs"
 mkdir -p "$SUPPORT" "$LOG_DIR"
 LOG_FILE="$LOG_DIR/launch.log"
 
+# Log, but keep stderr available for debugging if needed.
 exec >>"$LOG_FILE" 2>&1
 echo "---- $(date) ----"
 echo "Arch: $(uname -m)"
+echo "App root: $APP_ROOT"
+
+# Gatekeeper often blocks unsigned bundled binaries until quarantine is cleared.
+clear_quarantine "$APP_ROOT"
+clear_quarantine "$RESOURCES/runtime"
+clear_quarantine "$RESOURCES/runtime-packs"
 
 ARCH="$(arch_key)"
 BUNDLED_DIR="$RESOURCES/runtime/$ARCH"
@@ -210,55 +229,89 @@ EXTRACTED_PYTHON="$EXTRACTED_DIR/python/bin/python3"
 PYTHON_BIN=""
 PYTHON_HOME=""
 
-if [[ -x "$BUNDLED_PYTHON" ]] && deps_ok "$BUNDLED_PYTHON"; then
-  PYTHON_BIN="$BUNDLED_PYTHON"
-  PYTHON_HOME="$BUNDLED_DIR/python"
-  echo "Using in-bundle runtime: $PYTHON_BIN"
-elif [[ -x "$EXTRACTED_PYTHON" && -f "$EXTRACTED_DIR/version" && "$(cat "$EXTRACTED_DIR/version")" == "$RUNTIME_VERSION" ]] \
-  && deps_ok "$EXTRACTED_PYTHON"; then
-  PYTHON_BIN="$EXTRACTED_PYTHON"
-  PYTHON_HOME="$EXTRACTED_DIR/python"
-  echo "Using extracted bundled runtime: $PYTHON_BIN"
-else
-  if [[ ! -f "$PACK" ]]; then
-    abort "This copy of $APP_NAME is missing its built-in runtime.
+prepare_extracted() {
+  [[ -f "$PACK" ]] || abort "This copy of $APP_NAME is missing its built-in runtime pack.
 
-Please re-download the complete app from the repository.
-Nothing else needs to be installed."
-  fi
-
+Please re-download the complete app."
   notify "Preparing built-in runtime (first open)…"
-  echo "Extracting bundled runtime pack for $ARCH"
   rm -rf "$EXTRACTED_DIR"
   mkdir -p "$EXTRACTED_DIR"
-  if ! /usr/bin/tar -xzf "$PACK" -C "$EXTRACTED_DIR"; then
-    abort "Could not prepare the built-in runtime from the app bundle."
-  fi
-  if [[ ! -x "$EXTRACTED_PYTHON" ]] || ! deps_ok "$EXTRACTED_PYTHON"; then
-    abort "The built-in runtime looks incomplete.
+  /usr/bin/tar -xzf "$PACK" -C "$EXTRACTED_DIR" || abort "Could not prepare the built-in runtime."
+  clear_quarantine "$EXTRACTED_DIR"
+  # Ensure binaries are executable after extraction.
+  chmod -R u+rwX "$EXTRACTED_DIR" 2>/dev/null || true
+  chmod +x "$EXTRACTED_DIR/python/bin/"* 2>/dev/null || true
+  find "$EXTRACTED_DIR" -name '*.so' -exec chmod +x {} + 2>/dev/null || true
+  find "$EXTRACTED_DIR" -name '*.dylib' -exec chmod +x {} + 2>/dev/null || true
+}
 
-Please re-download the complete app from the repository."
-  fi
+if [[ -x "$BUNDLED_PYTHON" ]]; then
+  clear_quarantine "$BUNDLED_DIR"
+  chmod +x "$BUNDLED_DIR/python/bin/"* 2>/dev/null || true
+fi
+
+if [[ -x "$BUNDLED_PYTHON" ]] && runtime_ok "$BUNDLED_PYTHON"; then
+  PYTHON_BIN="$BUNDLED_PYTHON"
+  PYTHON_HOME="$BUNDLED_DIR/python"
+  echo "Using in-bundle runtime"
+elif [[ -x "$EXTRACTED_PYTHON" && -f "$EXTRACTED_DIR/version" && "$(cat "$EXTRACTED_DIR/version")" == "$RUNTIME_VERSION" ]] \
+  && runtime_ok "$EXTRACTED_PYTHON"; then
+  PYTHON_BIN="$EXTRACTED_PYTHON"
+  PYTHON_HOME="$EXTRACTED_DIR/python"
+  echo "Using extracted runtime"
+else
+  prepare_extracted
+  runtime_ok "$EXTRACTED_PYTHON" || abort "The built-in runtime could not start Tk/mutagen.
+
+Details are in:
+$LOG_FILE"
   PYTHON_BIN="$EXTRACTED_PYTHON"
   PYTHON_HOME="$EXTRACTED_DIR/python"
   notify "Ready"
 fi
 
-# Remove leftovers from older versions that used system Python.
 rm -rf "$SUPPORT/venv" "$SUPPORT/venv-python" 2>/dev/null || true
 
 cd "$RESOURCES"
 export PYTHONHOME="$PYTHON_HOME"
-export PYTHONPATH="$RESOURCES${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$RESOURCES"
 export PYTHONNOUSERSITE=1
+# Help bundled Tcl/Tk locate its files next to the runtime.
+# python-build-standalone layout for Tcl/Tk 9.
+if [[ -d "$PYTHON_HOME/lib/tcl9.0" ]]; then
+  export TCL_LIBRARY="$PYTHON_HOME/lib/tcl9.0"
+elif [[ -d "$PYTHON_HOME/lib/tcl9/9.0" ]]; then
+  export TCL_LIBRARY="$PYTHON_HOME/lib/tcl9/9.0"
+fi
+if [[ -d "$PYTHON_HOME/lib/tk9.0" ]]; then
+  export TK_LIBRARY="$PYTHON_HOME/lib/tk9.0"
+fi
 
-exec "$PYTHON_BIN" "$RESOURCES/clean_album_artists.py" --gui
+echo "PYTHON_BIN=$PYTHON_BIN"
+echo "PYTHONHOME=$PYTHONHOME"
+echo "TCL_LIBRARY=${TCL_LIBRARY:-}"
+echo "TK_LIBRARY=${TK_LIBRARY:-}"
+
+set +e
+"$PYTHON_BIN" "$RESOURCES/clean_album_artists.py" --gui
+STATUS=$?
+set -e
+
+if [[ $STATUS -ne 0 ]]; then
+  TAIL="$(tail -n 60 "$LOG_FILE" 2>/dev/null || true)"
+  abort "Album Artist Cleaner quit unexpectedly (code $STATUS).
+
+$TAIL"
+fi
+exit 0
 LAUNCHER
 
 chmod +x "$MACOS/AlbumArtistCleaner"
 printf 'APPL????' > "$CONTENTS/PkgInfo"
 
+# Remove obsolete AppleScript experiment if present.
+rm -f "$RESOURCES/gui.applescript"
+
 echo "Built: $APP"
 echo "Runtime packs: $(du -sh "$PACKS" | awk '{print $1}')"
 echo "Full app size: $(du -sh "$APP" | awk '{print $1}')"
-echo "Self-contained: no Homebrew, system Python, Tk, or internet required to run."
