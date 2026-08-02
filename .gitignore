@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+*.egg-info/
+dist/
+build/
+# Expanded runtime (large). The compressed packs in runtime-packs/ are committed
+# and extracted by the app as needed.
+Album Artist Cleaner.app/Contents/Resources/runtime/

@@ -1,0 +1,2 @@
+mutagen>=1.47.0
+pyobjc-framework-Cocoa>=10.0
