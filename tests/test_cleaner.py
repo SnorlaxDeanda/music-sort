@@ -11,6 +11,8 @@ from mutagen.id3 import ID3, TALB, TIT2, TPE1, TPE2
 from album_artist_cleaner.cleaner import (
     clean_album_artist,
     process_file,
+    rename_incompatible_paths,
+    sanitize_filename,
     scan_music_folder,
     summarize,
 )
@@ -98,13 +100,19 @@ def test_scan_music_folder(tmp_path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         _write_tagged_mp3(path, album_artist=album_artist)
 
-    report = scan_music_folder(library, dry_run=False, remove_duplicates=False)
+    report = scan_music_folder(
+        library,
+        dry_run=False,
+        remove_duplicates=False,
+        fix_filenames=False,
+    )
     stats = summarize(report)
 
     assert stats["total"] == 3
     assert stats["changed"] == 2
     assert stats["skipped"] == 1
     assert stats["deleted"] == 0
+    assert stats["renamed"] == 0
     assert EasyID3(a)["albumartist"] == ["Drake"]
     assert EasyID3(b)["albumartist"] == ["SZA"]
     assert EasyID3(c)["albumartist"] == ["Local Natives"]
@@ -138,12 +146,13 @@ def test_scan_music_folder_progress_callback(tmp_path: Path):
         dry_run=True,
         on_progress=on_progress,
         remove_duplicates=False,
+        fix_filenames=False,
     )
 
     assert len(report.tag_results) == 3
-    assert [item[0] for item in seen] == [1, 2, 3]
-    assert all(item[1] == 3 for item in seen)
-    assert [item[2] for item in seen] == sorted(paths)
+    assert [item[0] for item in seen[:3]] == [1, 2, 3]
+    assert all(item[1] == 3 for item in seen[:3])
+    assert [item[2] for item in seen[:3]] == sorted(paths)
 
 
 def test_deletes_duplicate_songs_by_tags(tmp_path: Path):
@@ -212,6 +221,60 @@ def test_dry_run_does_not_delete_duplicates(tmp_path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         _write_tagged_mp3(path, album_artist="Artist", title="Song", album="Album", payload=str(path).encode())
 
-    report = scan_music_folder(library, dry_run=True, remove_duplicates=True)
+    report = scan_music_folder(
+        library,
+        dry_run=True,
+        remove_duplicates=True,
+        fix_filenames=False,
+    )
     assert summarize(report)["deleted"] == 1
     assert a.exists() and b.exists()
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Artist`s Name", "Artist's Name"),
+        ("Artist's Name", "Artist's Name"),
+        ("Artist’s Name", "Artist's Name"),  # curly apostrophe
+        ("Hello: World?", "Hello- World"),
+        ("Track_01.mp3", "Track_01.mp3"),
+        ("Song*.mp3", "Song-.mp3"),
+        ('Album "Live"', "Album 'Live'"),
+    ],
+)
+def test_sanitize_filename(raw, expected):
+    assert sanitize_filename(raw) == expected
+
+
+def test_renames_backtick_folders_and_files(tmp_path: Path):
+    library = tmp_path / "Music"
+    old_file = library / "Artist`s Name" / "Album`s End" / "track`1.mp3"
+    old_file.parent.mkdir(parents=True)
+    _write_tagged_mp3(old_file, album_artist="Artist's Name")
+
+    results = rename_incompatible_paths(library, dry_run=False)
+    assert len(results) >= 2
+
+    new_file = library / "Artist's Name" / "Album's End" / "track'1.mp3"
+    assert new_file.exists()
+    assert not old_file.exists()
+
+
+def test_scan_fixes_filenames(tmp_path: Path):
+    library = tmp_path / "Music"
+    old_file = library / "Gun`s N Roses" / "Appetite" / "01.mp3"
+    old_file.parent.mkdir(parents=True)
+    _write_tagged_mp3(old_file, album_artist="Guns N Roses featuring Nobody")
+
+    report = scan_music_folder(
+        library,
+        dry_run=False,
+        remove_duplicates=False,
+        fix_filenames=True,
+    )
+    stats = summarize(report)
+    assert stats["renamed"] >= 1
+    new_file = library / "Gun's N Roses" / "Appetite" / "01.mp3"
+    assert new_file.exists()
+    assert EasyID3(new_file)["albumartist"] == ["Guns N Roses"]

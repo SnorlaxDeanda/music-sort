@@ -52,6 +52,44 @@ _COPY_SUFFIX = re.compile(
 
 AUDIO_EXTENSIONS = {".mp3"}
 
+# Characters that often become "_" (or are rejected) on Linux/Windows/Samba transfers.
+# Quote-like marks are normalized to a plain ASCII apostrophe.
+_APOSTROPHE_CHARS = str.maketrans(
+    {
+        "`": "'",  # backtick
+        "´": "'",  # acute accent
+        "‘": "'",  # left single quotation mark
+        "’": "'",  # right single quotation mark
+        "‛": "'",  # single high-reversed-9 quotation mark
+        "ʼ": "'",  # modifier letter apostrophe
+        "ʻ": "'",  # modifier letter turned comma
+        "′": "'",  # prime
+        "ꞌ": "'",  # latin small letter saltillo
+    }
+)
+
+# Other characters commonly rewritten to "_" by restrictive filesystems/tools.
+_UNSAFE_CHARS = str.maketrans(
+    {
+        '"': "'",
+        "“": "'",
+        "”": "'",
+        ":": "-",
+        "*": "-",
+        "?": "",
+        "<": "",
+        ">": "",
+        "|": "-",
+        "\\": "-",
+        "/": "-",
+        "#": "",
+        "%": "",
+    }
+)
+
+_MULTI_DASH = re.compile(r"-{2,}")
+_MULTI_UNDERSCORE = re.compile(r"_{2,}")
+
 
 @dataclass(frozen=True)
 class FileResult:
@@ -76,12 +114,23 @@ class DeleteResult:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class RenameResult:
+    """Outcome of renaming a path for cross-platform compatibility."""
+
+    original: Path
+    renamed: Path
+    changed: bool
+    error: str | None = None
+
+
 @dataclass
 class ScanReport:
     """Combined results from a library scan."""
 
     tag_results: list[FileResult] = field(default_factory=list)
     delete_results: list[DeleteResult] = field(default_factory=list)
+    rename_results: list[RenameResult] = field(default_factory=list)
 
     @property
     def files_scanned(self) -> int:
@@ -140,6 +189,111 @@ def list_mp3_files(root: Path | str) -> list[Path]:
     if not root_path.is_dir():
         raise NotADirectoryError(f"Not a directory: {root_path}")
     return list(_iter_mp3_files(root_path))
+
+
+def sanitize_filename(name: str) -> str:
+    """
+    Normalize a single path component for cross-platform use.
+
+    Backticks and curly/smart quotes become a plain apostrophe (').
+    Other characters that often become "_" on Linux/Windows/Samba are
+    replaced with safer ASCII alternatives.
+    """
+    if not name:
+        return name
+
+    stem = name
+    suffix = ""
+    # Preserve a normal file extension like .mp3 when present.
+    if "." in name and not name.startswith("."):
+        path_name = Path(name)
+        if path_name.suffix:
+            stem = path_name.stem
+            suffix = path_name.suffix
+
+    cleaned = stem.translate(_APOSTROPHE_CHARS).translate(_UNSAFE_CHARS)
+    cleaned = cleaned.replace("\0", "")
+    cleaned = _MULTI_SPACE.sub(" ", cleaned)
+    cleaned = _MULTI_DASH.sub("-", cleaned)
+    cleaned = _MULTI_UNDERSCORE.sub("_", cleaned)
+    cleaned = cleaned.strip(" .")
+    if not cleaned:
+        cleaned = "unnamed"
+    return f"{cleaned}{suffix}"
+
+
+def _unique_target(target: Path) -> Path:
+    """Avoid clobbering an existing path by adding ' (2)', ' (3)', …"""
+    if not target.exists():
+        return target
+    stem = target.stem
+    suffix = target.suffix
+    parent = target.parent
+    index = 2
+    while True:
+        candidate = parent / f"{stem} ({index}){suffix}"
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
+def rename_incompatible_paths(
+    root: Path | str,
+    *,
+    dry_run: bool = False,
+    on_progress: Optional[ProgressCallback] = None,
+    progress_offset: int = 0,
+    progress_total: int | None = None,
+) -> list[RenameResult]:
+    """
+    Rename files/folders under root whose names contain incompatible characters.
+
+    Processes deepest paths first so children are renamed before parents.
+    """
+    root_path = Path(root).expanduser().resolve()
+    if not root_path.is_dir():
+        raise NotADirectoryError(f"Not a directory: {root_path}")
+
+    # Collect every file and directory under root (not root itself).
+    entries = [path for path in root_path.rglob("*") if path.exists()]
+    # Deepest first.
+    entries.sort(key=lambda path: len(path.parts), reverse=True)
+
+    results: list[RenameResult] = []
+    total = progress_total if progress_total is not None else progress_offset + max(len(entries), 1)
+
+    for index, path in enumerate(entries, start=1):
+        original_name = path.name
+        new_name = sanitize_filename(original_name)
+        if new_name == original_name:
+            if on_progress is not None:
+                on_progress(progress_offset + index, total, path)
+            continue
+
+        target = _unique_target(path.with_name(new_name))
+        try:
+            if not dry_run:
+                path.rename(target)
+            results.append(
+                RenameResult(
+                    original=path,
+                    renamed=target,
+                    changed=True,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            results.append(
+                RenameResult(
+                    original=path,
+                    renamed=target,
+                    changed=False,
+                    error=str(exc),
+                )
+            )
+        if on_progress is not None:
+            on_progress(progress_offset + index, total, path)
+
+    return results
 
 
 def _read_tags(path: Path) -> dict[str, str | None]:
@@ -420,61 +574,76 @@ def scan_music_folder(
     dry_run: bool = False,
     on_progress: Optional[ProgressCallback] = None,
     remove_duplicates: bool = True,
+    fix_filenames: bool = True,
 ) -> ScanReport:
     """
     Scan a music library folder (artist > album > mp3):
 
-    1. Rewrite Album Artist tags that include featuring credits
-    2. Delete duplicate songs (same tags/title identity or identical files)
+    1. Rename folders/files with incompatible special characters
+    2. Rewrite Album Artist tags that include featuring credits
+    3. Delete duplicate songs (same tags/title identity or identical files)
 
     If ``on_progress`` is provided it is called as
     ``on_progress(current_index, total, path)`` during work (1-based).
     """
-    files = list_mp3_files(root)
-    # Progress spans tag cleaning + a second pass estimate for duplicates.
-    # Exact delete count is unknown until after tagging, so use 2 * n steps:
-    # first n for tags, remaining for duplicate pass over surviving files.
-    tag_total = len(files)
+    root_path = Path(root).expanduser().resolve()
     report = ScanReport()
+
+    rename_entries = list(root_path.rglob("*")) if fix_filenames else []
+    # Pre-count mp3s for progress; recount after renames for real work.
+    preliminary_files = list_mp3_files(root_path)
+    delete_budget = len(preliminary_files) if remove_duplicates else 0
+    overall_total = max(len(rename_entries) + len(preliminary_files) + delete_budget, 1)
+    progress_cursor = 0
+
+    if fix_filenames:
+        report.rename_results = rename_incompatible_paths(
+            root_path,
+            dry_run=dry_run,
+            on_progress=on_progress,
+            progress_offset=0,
+            progress_total=overall_total,
+        )
+        progress_cursor = len(rename_entries)
+
+    files = list_mp3_files(root_path)
+    tag_total = len(files)
 
     for index, path in enumerate(files, start=1):
         report.tag_results.append(process_file(path, dry_run=dry_run))
         if on_progress is not None:
-            # Reserve half the bar for tagging when duplicates are enabled.
-            if remove_duplicates and tag_total:
-                on_progress(index, tag_total * 2, path)
-            else:
-                on_progress(index, tag_total or 1, path)
+            on_progress(progress_cursor + index, overall_total, path)
 
     if not remove_duplicates:
+        if on_progress is not None:
+            on_progress(overall_total, overall_total, root_path)
         return report
 
     surviving = [path for path in files if path.exists()]
-    delete_budget = max(len(surviving), 1)
-    overall_total = (tag_total + delete_budget) if tag_total else delete_budget
-
     report.delete_results = delete_duplicate_songs(
         surviving,
         dry_run=dry_run,
         on_progress=on_progress,
-        progress_offset=tag_total,
+        progress_offset=progress_cursor + tag_total,
         progress_total=overall_total,
     )
 
-    if on_progress is not None and files:
-        on_progress(overall_total, overall_total, files[-1])
+    if on_progress is not None:
+        on_progress(overall_total, overall_total, root_path)
 
     return report
 
 
 def summarize(report: ScanReport | Iterable[FileResult]) -> dict[str, int]:
-    """Count changed / skipped / errored / deleted files."""
+    """Count changed / skipped / errored / deleted / renamed files."""
     if isinstance(report, ScanReport):
         tag_results = report.tag_results
         delete_results = report.delete_results
+        rename_results = report.rename_results
     else:
         tag_results = list(report)
         delete_results = []
+        rename_results = []
 
     changed = skipped = errors = 0
     for result in tag_results:
@@ -487,11 +656,14 @@ def summarize(report: ScanReport | Iterable[FileResult]) -> dict[str, int]:
 
     deleted = sum(1 for item in delete_results if item.error is None)
     delete_errors = sum(1 for item in delete_results if item.error is not None)
+    renamed = sum(1 for item in rename_results if item.changed and item.error is None)
+    rename_errors = sum(1 for item in rename_results if item.error is not None)
     return {
         "changed": changed,
         "skipped": skipped,
-        "errors": errors + delete_errors,
+        "errors": errors + delete_errors + rename_errors,
         "deleted": deleted,
+        "renamed": renamed,
         "total": len(tag_results),
     }
 

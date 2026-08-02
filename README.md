@@ -22,12 +22,15 @@ Artist/
 ```
 
 1. Rewrites **Album Artist** tags like `Artist A featuring Artist B` → `Artist A`
-2. Deletes **duplicate songs**, keeping one preferred copy
+2. Fixes **special characters in folder/file names** that often become `_` on Linux  
+   (e.g. backtick `` ` `` and curly quotes → plain `'`)
+3. Deletes **duplicate songs**, keeping one preferred copy
 
 ### In the app
 
 - Browse to your music folder
 - Use **Dry run** to preview changes
+- **Fix special characters** normalizes names like ``Artist`s`` → `Artist's`
 - **Delete duplicate songs** keeps one copy and removes extras
 - Watch the progress bar and activity log
 

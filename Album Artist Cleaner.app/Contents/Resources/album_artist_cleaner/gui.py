@@ -22,13 +22,15 @@ class AlbumArtistCleanerApp:
         initial_folder: str | None = None,
         dry_run: bool = False,
         remove_duplicates: bool = True,
+        fix_filenames: bool = True,
     ):
         self.root = root
         self.root.title("Album Artist Cleaner")
-        self.root.minsize(720, 540)
+        self.root.minsize(720, 560)
         self.folder_var = tk.StringVar(value=initial_folder or "")
         self.dry_run_var = tk.BooleanVar(value=dry_run)
         self.remove_duplicates_var = tk.BooleanVar(value=remove_duplicates)
+        self.fix_filenames_var = tk.BooleanVar(value=fix_filenames)
         self.progress_var = tk.DoubleVar(value=0.0)
         self.progress_text_var = tk.StringVar(value="Idle")
         self._busy = False
@@ -79,7 +81,8 @@ class AlbumArtistCleanerApp:
             frame,
             text=(
                 "Choose a music library folder (artist → album → mp3). "
-                "Cleans Album Artist featuring credits and deletes duplicate songs."
+                "Cleans Album Artist tags, fixes special characters in names, "
+                "and deletes duplicate songs."
             ),
             wraplength=660,
         )
@@ -108,6 +111,13 @@ class AlbumArtistCleanerApp:
             variable=self.remove_duplicates_var,
         )
         self.duplicates_check.pack(anchor=tk.W, pady=(4, 0))
+
+        self.filenames_check = ttk.Checkbutton(
+            options,
+            text="Fix special characters in folder/file names (e.g. ` → ' for Linux)",
+            variable=self.fix_filenames_var,
+        )
+        self.filenames_check.pack(anchor=tk.W, pady=(4, 0))
 
         actions = ttk.Frame(frame)
         actions.pack(fill=tk.X, **pad)
@@ -147,7 +157,8 @@ class AlbumArtistCleanerApp:
             "About Album Artist Cleaner",
             (
                 f"Album Artist Cleaner {__version__}\n\n"
-                "Cleans Album Artist featuring credits and deletes duplicate songs."
+                "Cleans Album Artist featuring credits, fixes special characters "
+                "in names, and deletes duplicate songs."
             ),
         )
 
@@ -183,6 +194,7 @@ class AlbumArtistCleanerApp:
         self.folder_entry.configure(state=state)
         self.dry_run_check.configure(state=state)
         self.duplicates_check.configure(state=state)
+        self.filenames_check.configure(state=state)
 
     def _set_progress(self, current: int, total: int, path: Path | None = None) -> None:
         if total <= 0:
@@ -208,6 +220,7 @@ class AlbumArtistCleanerApp:
 
         dry_run = self.dry_run_var.get()
         remove_duplicates = self.remove_duplicates_var.get()
+        fix_filenames = self.fix_filenames_var.get()
         if remove_duplicates and not dry_run:
             if not messagebox.askyesno(
                 "Delete duplicates?",
@@ -222,11 +235,17 @@ class AlbumArtistCleanerApp:
         self._set_busy(True)
         threading.Thread(
             target=self._worker,
-            args=(path, dry_run, remove_duplicates),
+            args=(path, dry_run, remove_duplicates, fix_filenames),
             daemon=True,
         ).start()
 
-    def _worker(self, path: Path, dry_run: bool, remove_duplicates: bool) -> None:
+    def _worker(
+        self,
+        path: Path,
+        dry_run: bool,
+        remove_duplicates: bool,
+        fix_filenames: bool,
+    ) -> None:
         try:
             def on_progress(current: int, total: int, file_path: Path) -> None:
                 self._event_queue.put(("progress", (current, total, file_path)))
@@ -236,6 +255,7 @@ class AlbumArtistCleanerApp:
                 dry_run=dry_run,
                 on_progress=on_progress,
                 remove_duplicates=remove_duplicates,
+                fix_filenames=fix_filenames,
             )
             self._event_queue.put(("done", (report, dry_run)))
         except Exception as exc:  # noqa: BLE001
@@ -264,6 +284,13 @@ class AlbumArtistCleanerApp:
         total = report.files_scanned
         self._set_progress(max(total, 1), max(total, 1))
 
+        for result in report.rename_results:
+            if result.error:
+                self._append_log(f"ERROR  {result.original}: {result.error}")
+            elif result.changed:
+                prefix = "WOULD RENAME" if dry_run else "RENAMED"
+                self._append_log(f"{prefix}  {result.original.name} -> {result.renamed.name}")
+
         for result in report.tag_results:
             if result.error:
                 self._append_log(f"ERROR  {result.path}: {result.error}")
@@ -284,6 +311,7 @@ class AlbumArtistCleanerApp:
         mode = "Dry run" if dry_run else "Done"
         summary = (
             f"{mode}: {stats['changed']} changed, "
+            f"{stats['renamed']} renamed, "
             f"{stats['deleted']} deleted, "
             f"{stats['skipped']} unchanged, "
             f"{stats['errors']} errors "
@@ -303,6 +331,7 @@ def run_gui(
     initial_folder: str | None = None,
     dry_run: bool = False,
     remove_duplicates: bool = True,
+    fix_filenames: bool = True,
 ) -> int:
     # Bundled runtime includes Tcl/Tk — use Tk directly (no system Tk needed).
     root = tk.Tk()
@@ -317,6 +346,7 @@ def run_gui(
         initial_folder=initial_folder,
         dry_run=dry_run,
         remove_duplicates=remove_duplicates,
+        fix_filenames=fix_filenames,
     )
 
     if sys.platform == "darwin":
@@ -327,7 +357,8 @@ def run_gui(
                     "About Album Artist Cleaner",
                     (
                         f"Album Artist Cleaner {__version__}\n\n"
-                        "Cleans Album Artist featuring credits and deletes duplicate songs."
+                        "Cleans Album Artist featuring credits, fixes special characters "
+                        "in names, and deletes duplicate songs."
                     ),
                 ),
             )

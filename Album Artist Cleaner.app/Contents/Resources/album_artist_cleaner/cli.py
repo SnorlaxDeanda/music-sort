@@ -14,8 +14,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="album-artist-cleaner",
         description=(
-            "Scan a music folder (artist > album > mp3), rewrite Album Artist "
-            "tags that include featured artists, and delete duplicate songs."
+            "Scan a music folder (artist > album > mp3), fix incompatible "
+            "filenames, rewrite Album Artist featuring tags, and delete duplicates."
         ),
     )
     parser.add_argument(
@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         "-n",
         action="store_true",
-        help="Show what would change/delete without writing or removing files.",
+        help="Show what would change/delete/rename without modifying files.",
     )
     parser.add_argument(
         "--quiet",
@@ -46,6 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not delete duplicate songs.",
     )
     parser.add_argument(
+        "--keep-filenames",
+        action="store_true",
+        help="Do not rename folders/files with incompatible special characters.",
+    )
+    parser.add_argument(
         "--json-progress",
         action="store_true",
         help="Emit JSON lines for progress/events (used by the macOS app UI).",
@@ -54,6 +59,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def print_results(report: ScanReport, *, quiet: bool = False, dry_run: bool = False) -> int:
+    for result in report.rename_results:
+        if result.error:
+            print(f"ERROR  {result.original}: {result.error}", file=sys.stderr)
+            continue
+        if quiet:
+            continue
+        prefix = "WOULD RENAME" if dry_run else "RENAMED"
+        print(f"{prefix}  {result.original.name} -> {result.renamed.name}")
+        print(f"  {result.original} -> {result.renamed}")
+
     for result in report.tag_results:
         if result.error:
             print(f"ERROR  {result.path}: {result.error}", file=sys.stderr)
@@ -78,6 +93,7 @@ def print_results(report: ScanReport, *, quiet: bool = False, dry_run: bool = Fa
     mode = "Dry run" if dry_run else "Done"
     print(
         f"{mode}: {stats['changed']} changed, "
+        f"{stats['renamed']} renamed, "
         f"{stats['deleted']} deleted, "
         f"{stats['skipped']} unchanged, "
         f"{stats['errors']} errors "
@@ -96,6 +112,7 @@ def run_json_progress(
     *,
     dry_run: bool,
     remove_duplicates: bool,
+    fix_filenames: bool,
 ) -> int:
     def on_progress(current: int, total: int, path: Path) -> None:
         emit(
@@ -114,6 +131,7 @@ def run_json_progress(
             dry_run=dry_run,
             on_progress=on_progress,
             remove_duplicates=remove_duplicates,
+            fix_filenames=fix_filenames,
         )
     except NotADirectoryError as exc:
         emit({"type": "error", "message": str(exc)})
@@ -123,6 +141,20 @@ def run_json_progress(
         return 1
 
     events: list[dict] = []
+    for result in report.rename_results:
+        if result.error:
+            events.append(
+                {"kind": "error", "path": str(result.original), "message": result.error}
+            )
+        elif result.changed:
+            events.append(
+                {
+                    "kind": "rename",
+                    "path": str(result.original),
+                    "renamed": str(result.renamed),
+                }
+            )
+
     for result in report.tag_results:
         if result.error:
             events.append({"kind": "error", "path": str(result.path), "message": result.error})
@@ -163,6 +195,8 @@ def run_json_progress(
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    remove_duplicates = not args.keep_duplicates
+    fix_filenames = not args.keep_filenames
 
     if args.json_progress:
         if not args.folder:
@@ -171,7 +205,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_json_progress(
             Path(args.folder),
             dry_run=args.dry_run,
-            remove_duplicates=not args.keep_duplicates,
+            remove_duplicates=remove_duplicates,
+            fix_filenames=fix_filenames,
         )
 
     if args.gui or not args.folder:
@@ -180,7 +215,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_gui(
             initial_folder=args.folder,
             dry_run=args.dry_run,
-            remove_duplicates=not args.keep_duplicates,
+            remove_duplicates=remove_duplicates,
+            fix_filenames=fix_filenames,
         )
 
     folder = Path(args.folder)
@@ -188,7 +224,8 @@ def main(argv: list[str] | None = None) -> int:
         report = scan_music_folder(
             folder,
             dry_run=args.dry_run,
-            remove_duplicates=not args.keep_duplicates,
+            remove_duplicates=remove_duplicates,
+            fix_filenames=fix_filenames,
         )
     except NotADirectoryError as exc:
         print(str(exc), file=sys.stderr)

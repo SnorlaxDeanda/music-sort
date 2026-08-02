@@ -6,6 +6,7 @@ from .cleaner import (
     clean_album_artist,
     list_mp3_files,
     process_file,
+    sanitize_filename,
     scan_music_folder,
 )
 
@@ -15,7 +16,8 @@ __all__ = [
     "clean_album_artist",
     "list_mp3_files",
     "process_file",
+    "sanitize_filename",
     "scan_music_folder",
 ]
 
-__version__ = "1.5.1"
+__version__ = "1.6.0"
