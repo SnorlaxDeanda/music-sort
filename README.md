@@ -55,6 +55,7 @@ open -e "$HOME/Library/Application Support/Album Artist Cleaner/Logs/launch.log"
 - Run **Dry run** first
 - Back up your library before bulk edits/deletes
 - Only `.mp3` files are processed
+- Files/folders starting with `._` (macOS AppleDouble sidecars) are ignored
 
 ## For developers
 

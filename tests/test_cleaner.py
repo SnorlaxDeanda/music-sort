@@ -278,3 +278,29 @@ def test_scan_fixes_filenames(tmp_path: Path):
     new_file = library / "Gun's N Roses" / "Appetite" / "01.mp3"
     assert new_file.exists()
     assert EasyID3(new_file)["albumartist"] == ["Guns N Roses"]
+
+
+def test_ignores_appledouble_dot_underscore_files(tmp_path: Path):
+    from album_artist_cleaner.cleaner import list_mp3_files
+
+    library = tmp_path / "Music"
+    real = library / "Artist" / "Album" / "song.mp3"
+    junk = library / "Artist" / "Album" / "._song.mp3"
+    real.parent.mkdir(parents=True)
+    _write_tagged_mp3(real, album_artist="Artist featuring Guest")
+    _write_tagged_mp3(junk, album_artist="Artist featuring Guest")
+
+    files = list_mp3_files(library)
+    assert files == [real]
+
+    report = scan_music_folder(
+        library,
+        dry_run=False,
+        remove_duplicates=False,
+        fix_filenames=True,
+    )
+    assert report.files_scanned == 1
+    assert EasyID3(real)["albumartist"] == ["Artist"]
+    # AppleDouble sidecar left untouched (including its name).
+    assert junk.exists()
+    assert junk.name == "._song.mp3"

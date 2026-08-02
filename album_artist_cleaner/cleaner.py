@@ -52,6 +52,16 @@ _COPY_SUFFIX = re.compile(
 
 AUDIO_EXTENSIONS = {".mp3"}
 
+
+def _is_ignored_name(name: str) -> bool:
+    """Ignore macOS AppleDouble / resource-fork files like '._track.mp3'."""
+    return name.startswith("._")
+
+
+def _is_ignored_path(path: Path) -> bool:
+    """True if this path or any parent component should be skipped."""
+    return any(_is_ignored_name(part) for part in path.parts)
+
 # Characters that often become "_" (or are rejected) on Linux/Windows/Samba transfers.
 # Quote-like marks are normalized to a plain ASCII apostrophe.
 _APOSTROPHE_CHARS = str.maketrans(
@@ -179,6 +189,8 @@ def _normalize_title(value: str | None, fallback_stem: str) -> str:
 
 def _iter_mp3_files(root: Path) -> Iterator[Path]:
     for path in sorted(root.rglob("*")):
+        if _is_ignored_path(path):
+            continue
         if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS:
             yield path
 
@@ -255,7 +267,12 @@ def rename_incompatible_paths(
         raise NotADirectoryError(f"Not a directory: {root_path}")
 
     # Collect every file and directory under root (not root itself).
-    entries = [path for path in root_path.rglob("*") if path.exists()]
+    # Skip macOS AppleDouble files/folders that start with "._".
+    entries = [
+        path
+        for path in root_path.rglob("*")
+        if path.exists() and not _is_ignored_path(path)
+    ]
     # Deepest first.
     entries.sort(key=lambda path: len(path.parts), reverse=True)
 
@@ -589,7 +606,11 @@ def scan_music_folder(
     root_path = Path(root).expanduser().resolve()
     report = ScanReport()
 
-    rename_entries = list(root_path.rglob("*")) if fix_filenames else []
+    rename_entries = (
+        [path for path in root_path.rglob("*") if not _is_ignored_path(path)]
+        if fix_filenames
+        else []
+    )
     # Pre-count mp3s for progress; recount after renames for real work.
     preliminary_files = list_mp3_files(root_path)
     delete_budget = len(preliminary_files) if remove_duplicates else 0
