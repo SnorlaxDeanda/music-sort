@@ -143,14 +143,23 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
+# Canonical no-build-required launcher (runtime packs are already inside the .app).
 cat > "$MACOS/AlbumArtistCleaner" <<'LAUNCHER'
 #!/bin/bash
 # Self-contained launcher. Uses only the runtime shipped inside this .app.
-# Does not require Homebrew, system Python, Tk, or an internet connection.
+# Does not require Homebrew, system Python, Tk, internet, or a build step.
 set -euo pipefail
 
 APP_NAME="Album Artist Cleaner"
 RUNTIME_VERSION="cpython-3.12.13+20260728"
+
+notify() {
+  local message="$1"
+  if command -v osascript >/dev/null 2>&1; then
+    osascript -e "display notification \"$(printf '%s' "$message" | sed 's/"/\\"/g')\" with title \"$APP_NAME\"" \
+      >/dev/null 2>&1 || true
+  fi
+}
 
 abort() {
   local message="$1"
@@ -212,28 +221,27 @@ elif [[ -x "$EXTRACTED_PYTHON" && -f "$EXTRACTED_DIR/version" && "$(cat "$EXTRAC
   echo "Using extracted bundled runtime: $PYTHON_BIN"
 else
   if [[ ! -f "$PACK" ]]; then
-    abort "This app is missing its built-in runtime pack:
+    abort "This copy of $APP_NAME is missing its built-in runtime.
 
-$PACK
-
-Rebuild with:
-  ./scripts/build_macos_app.sh
-
-The app is meant to be fully self-contained and does not use system Python."
+Please re-download the complete app from the repository.
+Nothing else needs to be installed."
   fi
 
+  notify "Preparing built-in runtime (first open)…"
   echo "Extracting bundled runtime pack for $ARCH"
   rm -rf "$EXTRACTED_DIR"
   mkdir -p "$EXTRACTED_DIR"
   if ! /usr/bin/tar -xzf "$PACK" -C "$EXTRACTED_DIR"; then
-    abort "Could not extract the built-in runtime from the app bundle."
+    abort "Could not prepare the built-in runtime from the app bundle."
   fi
   if [[ ! -x "$EXTRACTED_PYTHON" ]] || ! deps_ok "$EXTRACTED_PYTHON"; then
-    abort "The built-in runtime is incomplete or corrupted.
-Please rebuild the app with ./scripts/build_macos_app.sh"
+    abort "The built-in runtime looks incomplete.
+
+Please re-download the complete app from the repository."
   fi
   PYTHON_BIN="$EXTRACTED_PYTHON"
   PYTHON_HOME="$EXTRACTED_DIR/python"
+  notify "Ready"
 fi
 
 # Remove leftovers from older versions that used system Python.
