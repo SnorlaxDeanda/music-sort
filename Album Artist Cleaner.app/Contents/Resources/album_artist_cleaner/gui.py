@@ -304,8 +304,9 @@ def run_gui(
     dry_run: bool = False,
     remove_duplicates: bool = True,
 ) -> int:
-    # Bundled runtime includes Tcl/Tk — use Tk directly (no PyObjC / system Tk needed).
+    # Bundled runtime includes Tcl/Tk — use Tk directly (no system Tk needed).
     root = tk.Tk()
+    root.title("Album Artist Cleaner")
     try:
         root.tk.call("tk", "scaling", 1.25)
     except tk.TclError:
@@ -333,9 +334,13 @@ def run_gui(
         except tk.TclError:
             pass
 
-    root.lift()
-    root.attributes("-topmost", True)
-    root.after(200, lambda: root.attributes("-topmost", False))
-    root.focus_force()
+    try:
+        root.lift()
+        root.attributes("-topmost", True)
+        root.after(300, lambda: root.attributes("-topmost", False))
+        root.focus_force()
+    except tk.TclError:
+        pass
+
     root.mainloop()
     return 0

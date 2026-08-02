@@ -20,15 +20,10 @@ mkdir -p "$MACOS" "$RESOURCES" "$PACKS"
 rm -rf "$RESOURCES/album_artist_cleaner"
 cp -R "$ROOT/album_artist_cleaner" "$RESOURCES/album_artist_cleaner"
 cp "$ROOT/clean_album_artists.py" "$RESOURCES/clean_album_artists.py"
+cp "$ROOT/launch_gui.py" "$RESOURCES/launch_gui.py"
 cp "$ROOT/requirements-macos.txt" "$RESOURCES/requirements-macos.txt"
 find "$RESOURCES/album_artist_cleaner" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$RESOURCES" -type f -name '*.pyc' -delete
-
-# Keep a tiny native UI helper for fallback dialogs if needed.
-cat > "$RESOURCES/run_worker.py" <<'PY'
-from album_artist_cleaner.cli import main
-raise SystemExit(main())
-PY
 
 trim_runtime() {
   local python_root="$1"
@@ -137,175 +132,20 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.5.0</string>
+	<string>1.5.1</string>
 	<key>CFBundleVersion</key>
-	<string>5</string>
+	<string>6</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.music</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>11.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
-	<key>NSPrincipalClass</key>
-	<string>NSApplication</string>
 </dict>
 </plist>
 PLIST
 
-cat > "$MACOS/AlbumArtistCleaner" <<'LAUNCHER'
-#!/bin/bash
-# Self-contained launcher. No Homebrew / system Python / internet required.
-set -euo pipefail
-
-APP_NAME="Album Artist Cleaner"
-RUNTIME_VERSION="cpython-3.12.13+20260728"
-
-notify() {
-  local message="$1"
-  /usr/bin/osascript -e "display notification \"$(printf '%s' "$message" | sed 's/"/\\"/g')\" with title \"$APP_NAME\"" \
-    >/dev/null 2>&1 || true
-}
-
-abort() {
-  local message="$1"
-  local escaped
-  escaped="$(printf '%s' "$message" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-  /usr/bin/osascript -e "display alert \"$APP_NAME\" message \"$escaped\" as critical" \
-    >/dev/null 2>&1 || true
-  echo "$message" >&2
-  exit 1
-}
-
-arch_key() {
-  case "$(uname -m)" in
-    arm64|aarch64) echo "aarch64" ;;
-    x86_64) echo "x86_64" ;;
-    *) abort "Unsupported Mac architecture: $(uname -m)" ;;
-  esac
-}
-
-clear_quarantine() {
-  local target="$1"
-  if [[ -e "$target" ]]; then
-    /usr/bin/xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
-  fi
-}
-
-runtime_ok() {
-  local python_bin="$1"
-  # Must be able to import mutagen and tkinter from the bundled runtime.
-  "$python_bin" - <<'PY' >/dev/null 2>&1
-import mutagen
-import tkinter
-PY
-}
-
-HERE="$(cd "$(dirname "$0")" && pwd)"
-RESOURCES="$(cd "$HERE/../Resources" && pwd)"
-APP_ROOT="$(cd "$HERE/../.." && pwd)"
-SUPPORT="${HOME}/Library/Application Support/Album Artist Cleaner"
-LOG_DIR="$SUPPORT/Logs"
-mkdir -p "$SUPPORT" "$LOG_DIR"
-LOG_FILE="$LOG_DIR/launch.log"
-
-# Log, but keep stderr available for debugging if needed.
-exec >>"$LOG_FILE" 2>&1
-echo "---- $(date) ----"
-echo "Arch: $(uname -m)"
-echo "App root: $APP_ROOT"
-
-# Gatekeeper often blocks unsigned bundled binaries until quarantine is cleared.
-clear_quarantine "$APP_ROOT"
-clear_quarantine "$RESOURCES/runtime"
-clear_quarantine "$RESOURCES/runtime-packs"
-
-ARCH="$(arch_key)"
-BUNDLED_DIR="$RESOURCES/runtime/$ARCH"
-BUNDLED_PYTHON="$BUNDLED_DIR/python/bin/python3"
-PACK="$RESOURCES/runtime-packs/${ARCH}.tar.gz"
-EXTRACTED_DIR="$SUPPORT/runtime/$ARCH"
-EXTRACTED_PYTHON="$EXTRACTED_DIR/python/bin/python3"
-
-PYTHON_BIN=""
-PYTHON_HOME=""
-
-prepare_extracted() {
-  [[ -f "$PACK" ]] || abort "This copy of $APP_NAME is missing its built-in runtime pack.
-
-Please re-download the complete app."
-  notify "Preparing built-in runtime (first open)…"
-  rm -rf "$EXTRACTED_DIR"
-  mkdir -p "$EXTRACTED_DIR"
-  /usr/bin/tar -xzf "$PACK" -C "$EXTRACTED_DIR" || abort "Could not prepare the built-in runtime."
-  clear_quarantine "$EXTRACTED_DIR"
-  # Ensure binaries are executable after extraction.
-  chmod -R u+rwX "$EXTRACTED_DIR" 2>/dev/null || true
-  chmod +x "$EXTRACTED_DIR/python/bin/"* 2>/dev/null || true
-  find "$EXTRACTED_DIR" -name '*.so' -exec chmod +x {} + 2>/dev/null || true
-  find "$EXTRACTED_DIR" -name '*.dylib' -exec chmod +x {} + 2>/dev/null || true
-}
-
-if [[ -x "$BUNDLED_PYTHON" ]]; then
-  clear_quarantine "$BUNDLED_DIR"
-  chmod +x "$BUNDLED_DIR/python/bin/"* 2>/dev/null || true
-fi
-
-if [[ -x "$BUNDLED_PYTHON" ]] && runtime_ok "$BUNDLED_PYTHON"; then
-  PYTHON_BIN="$BUNDLED_PYTHON"
-  PYTHON_HOME="$BUNDLED_DIR/python"
-  echo "Using in-bundle runtime"
-elif [[ -x "$EXTRACTED_PYTHON" && -f "$EXTRACTED_DIR/version" && "$(cat "$EXTRACTED_DIR/version")" == "$RUNTIME_VERSION" ]] \
-  && runtime_ok "$EXTRACTED_PYTHON"; then
-  PYTHON_BIN="$EXTRACTED_PYTHON"
-  PYTHON_HOME="$EXTRACTED_DIR/python"
-  echo "Using extracted runtime"
-else
-  prepare_extracted
-  runtime_ok "$EXTRACTED_PYTHON" || abort "The built-in runtime could not start Tk/mutagen.
-
-Details are in:
-$LOG_FILE"
-  PYTHON_BIN="$EXTRACTED_PYTHON"
-  PYTHON_HOME="$EXTRACTED_DIR/python"
-  notify "Ready"
-fi
-
-rm -rf "$SUPPORT/venv" "$SUPPORT/venv-python" 2>/dev/null || true
-
-cd "$RESOURCES"
-export PYTHONHOME="$PYTHON_HOME"
-export PYTHONPATH="$RESOURCES"
-export PYTHONNOUSERSITE=1
-# Help bundled Tcl/Tk locate its files next to the runtime.
-# python-build-standalone layout for Tcl/Tk 9.
-if [[ -d "$PYTHON_HOME/lib/tcl9.0" ]]; then
-  export TCL_LIBRARY="$PYTHON_HOME/lib/tcl9.0"
-elif [[ -d "$PYTHON_HOME/lib/tcl9/9.0" ]]; then
-  export TCL_LIBRARY="$PYTHON_HOME/lib/tcl9/9.0"
-fi
-if [[ -d "$PYTHON_HOME/lib/tk9.0" ]]; then
-  export TK_LIBRARY="$PYTHON_HOME/lib/tk9.0"
-fi
-
-echo "PYTHON_BIN=$PYTHON_BIN"
-echo "PYTHONHOME=$PYTHONHOME"
-echo "TCL_LIBRARY=${TCL_LIBRARY:-}"
-echo "TK_LIBRARY=${TK_LIBRARY:-}"
-
-set +e
-"$PYTHON_BIN" "$RESOURCES/clean_album_artists.py" --gui
-STATUS=$?
-set -e
-
-if [[ $STATUS -ne 0 ]]; then
-  TAIL="$(tail -n 60 "$LOG_FILE" 2>/dev/null || true)"
-  abort "Album Artist Cleaner quit unexpectedly (code $STATUS).
-
-$TAIL"
-fi
-exit 0
-LAUNCHER
-
+cp "$ROOT/scripts/macos_launcher.sh" "$MACOS/AlbumArtistCleaner"
 chmod +x "$MACOS/AlbumArtistCleaner"
 printf 'APPL????' > "$CONTENTS/PkgInfo"
 

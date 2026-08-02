@@ -31,16 +31,17 @@ Artist/
 - **Delete duplicate songs** keeps one copy and removes extras
 - Watch the progress bar and activity log
 
-## If the app closes immediately
+## If the app closes right after you allow it in Privacy & Security
 
-1. Right-click the app → **Open** (needed once for Gatekeeper)
-2. Or clear quarantine in Terminal:
+Reset the cached runtime and reopen:
 
 ```bash
+rm -rf "$HOME/Library/Application Support/Album Artist Cleaner"
 xattr -dr com.apple.quarantine "/path/to/Album Artist Cleaner.app"
+open "/path/to/Album Artist Cleaner.app"
 ```
 
-3. Check the launch log:
+If it still fails, check:
 
 ```bash
 open -e "$HOME/Library/Application Support/Album Artist Cleaner/Logs/launch.log"
