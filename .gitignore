@@ -6,5 +6,6 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-# Large embedded Python runtimes (recreated by scripts/build_macos_app.sh)
+# Expanded runtime (large). The compressed packs in runtime-packs/ are committed
+# and extracted by the app as needed.
 Album Artist Cleaner.app/Contents/Resources/runtime/

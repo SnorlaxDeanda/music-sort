@@ -1,21 +1,18 @@
 #!/bin/bash
+# Self-contained launcher. Uses only the runtime shipped inside this .app.
+# Does not require Homebrew, system Python, Tk, or an internet connection.
 set -euo pipefail
 
 APP_NAME="Album Artist Cleaner"
 RUNTIME_VERSION="cpython-3.12.13+20260728"
-PBS_TAG="20260728"
-
-notify() {
-  local message="$1"
-  osascript -e "display notification \"$(printf '%s' "$message" | sed 's/"/\\"/g')\" with title \"$APP_NAME\"" \
-    >/dev/null 2>&1 || true
-}
 
 abort() {
   local message="$1"
   local escaped
   escaped="$(printf '%s' "$message" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-  osascript -e "display alert \"$APP_NAME\" message \"$escaped\" as critical" >/dev/null 2>&1 || true
+  if command -v osascript >/dev/null 2>&1; then
+    osascript -e "display alert \"$APP_NAME\" message \"$escaped\" as critical" >/dev/null 2>&1 || true
+  fi
   echo "$message" >&2
   exit 1
 }
@@ -49,60 +46,51 @@ echo "---- $(date) ----"
 echo "Arch: $(uname -m)"
 
 ARCH="$(arch_key)"
-BUNDLED="$RESOURCES/runtime/$ARCH"
-BUNDLED_PYTHON="$BUNDLED/python/bin/python3"
-FALLBACK="$SUPPORT/runtime"
-FALLBACK_PYTHON="$FALLBACK/python/bin/python3"
+BUNDLED_DIR="$RESOURCES/runtime/$ARCH"
+BUNDLED_PYTHON="$BUNDLED_DIR/python/bin/python3"
+PACK="$RESOURCES/runtime-packs/${ARCH}.tar.gz"
+EXTRACTED_DIR="$SUPPORT/runtime/$ARCH"
+EXTRACTED_PYTHON="$EXTRACTED_DIR/python/bin/python3"
 
 PYTHON_BIN=""
 PYTHON_HOME=""
 
 if [[ -x "$BUNDLED_PYTHON" ]] && deps_ok "$BUNDLED_PYTHON"; then
   PYTHON_BIN="$BUNDLED_PYTHON"
-  PYTHON_HOME="$BUNDLED/python"
-  echo "Using bundled runtime: $PYTHON_BIN"
-elif [[ -x "$FALLBACK_PYTHON" && -f "$FALLBACK/version" && "$(cat "$FALLBACK/version")" == "$RUNTIME_VERSION" ]] \
-  && deps_ok "$FALLBACK_PYTHON"; then
-  PYTHON_BIN="$FALLBACK_PYTHON"
-  PYTHON_HOME="$FALLBACK/python"
-  echo "Using cached runtime: $PYTHON_BIN"
+  PYTHON_HOME="$BUNDLED_DIR/python"
+  echo "Using in-bundle runtime: $PYTHON_BIN"
+elif [[ -x "$EXTRACTED_PYTHON" && -f "$EXTRACTED_DIR/version" && "$(cat "$EXTRACTED_DIR/version")" == "$RUNTIME_VERSION" ]] \
+  && deps_ok "$EXTRACTED_PYTHON"; then
+  PYTHON_BIN="$EXTRACTED_PYTHON"
+  PYTHON_HOME="$EXTRACTED_DIR/python"
+  echo "Using extracted bundled runtime: $PYTHON_BIN"
 else
-  # One-time download using only built-in macOS tools (no Homebrew/Python needed).
-  local_arch="$ARCH"
-  tarball="${RUNTIME_VERSION}-${local_arch}-apple-darwin-install_only.tar.gz"
-  url="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/${tarball}"
-  tmp="$(mktemp -d /tmp/album-artist-cleaner.XXXXXX)"
+  if [[ ! -f "$PACK" ]]; then
+    abort "This app is missing its built-in runtime pack:
 
-  notify "First launch setup — downloading built-in runtime…"
-  echo "Downloading $url"
-  if ! /usr/bin/curl -fL --retry 3 --retry-delay 2 -o "$tmp/$tarball" "$url"; then
-    rm -rf "$tmp"
-    abort "Could not download the built-in runtime.
+$PACK
 
-An internet connection is needed the first time only.
-You do not need to install Python, Homebrew, or Tk."
+Rebuild with:
+  ./scripts/build_macos_app.sh
+
+The app is meant to be fully self-contained and does not use system Python."
   fi
 
-  rm -rf "$FALLBACK"
-  mkdir -p "$FALLBACK"
-  /usr/bin/tar -xzf "$tmp/$tarball" -C "$FALLBACK"
-  rm -rf "$tmp"
-
-  if [[ ! -x "$FALLBACK_PYTHON" ]]; then
-    abort "Runtime download succeeded but python3 was missing."
+  echo "Extracting bundled runtime pack for $ARCH"
+  rm -rf "$EXTRACTED_DIR"
+  mkdir -p "$EXTRACTED_DIR"
+  if ! /usr/bin/tar -xzf "$PACK" -C "$EXTRACTED_DIR"; then
+    abort "Could not extract the built-in runtime from the app bundle."
   fi
-
-  notify "Installing app components…"
-  "$FALLBACK_PYTHON" -m pip install --upgrade pip
-  "$FALLBACK_PYTHON" -m pip install -r "$RESOURCES/requirements-macos.txt"
-  printf '%s\n' "$RUNTIME_VERSION" > "$FALLBACK/version"
-
-  PYTHON_BIN="$FALLBACK_PYTHON"
-  PYTHON_HOME="$FALLBACK/python"
-  notify "Setup complete"
+  if [[ ! -x "$EXTRACTED_PYTHON" ]] || ! deps_ok "$EXTRACTED_PYTHON"; then
+    abort "The built-in runtime is incomplete or corrupted.
+Please rebuild the app with ./scripts/build_macos_app.sh"
+  fi
+  PYTHON_BIN="$EXTRACTED_PYTHON"
+  PYTHON_HOME="$EXTRACTED_DIR/python"
 fi
 
-# Clean up obsolete system-python env from older app versions.
+# Remove leftovers from older versions that used system Python.
 rm -rf "$SUPPORT/venv" "$SUPPORT/venv-python" 2>/dev/null || true
 
 cd "$RESOURCES"

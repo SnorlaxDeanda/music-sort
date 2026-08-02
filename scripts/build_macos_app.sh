@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Assemble a self-contained "Album Artist Cleaner.app".
-# No Homebrew, system Python, or Tk is required to run the app.
+# Assemble a fully self-contained "Album Artist Cleaner.app".
+# The finished .app includes its own Python runtime + dependencies.
+# Running the app requires no Homebrew, system Python, Tk, or internet.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -9,27 +10,43 @@ APP="$ROOT/$APP_NAME"
 CONTENTS="$APP/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
+PACKS="$RESOURCES/runtime-packs"
 
 PBS_TAG="20260728"
 RUNTIME_VERSION="cpython-3.12.13+20260728"
 
-mkdir -p "$MACOS" "$RESOURCES"
+mkdir -p "$MACOS" "$RESOURCES" "$PACKS"
 
 # Copy application payload into the bundle.
 rm -rf "$RESOURCES/album_artist_cleaner"
 cp -R "$ROOT/album_artist_cleaner" "$RESOURCES/album_artist_cleaner"
 cp "$ROOT/clean_album_artists.py" "$RESOURCES/clean_album_artists.py"
 cp "$ROOT/requirements-macos.txt" "$RESOURCES/requirements-macos.txt"
-find "$RESOURCES" -type d -name '__pycache__' -prune -exec rm -rf {} +
+find "$RESOURCES/album_artist_cleaner" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$RESOURCES" -type f -name '*.pyc' -delete
 
-install_runtime_for_arch() {
+trim_runtime() {
+  local python_root="$1"
+  # Drop developer tooling and caches that are not needed at runtime.
+  rm -rf \
+    "$python_root/lib/python3.12/test" \
+    "$python_root/lib/python3.12/tkinter" \
+    "$python_root/lib/python3.12/idlelib" \
+    "$python_root/lib/python3.12/turtledemo" \
+    "$python_root/lib/python3.12/ensurepip" \
+    "$python_root/lib/python3.12/lib2to3" \
+    "$python_root/lib/python3.12/config-3.12"* \
+    "$python_root/share" \
+    "$python_root/include" 2>/dev/null || true
+  find "$python_root" -type d -name '__pycache__' -prune -exec rm -rf {} +
+  find "$python_root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+}
+
+build_pack_for_arch() {
   local arch="$1"
-  local dest="$RESOURCES/runtime/$arch"
-  local tarball="${RUNTIME_VERSION}-${arch}-apple-darwin-install_only.tar.gz"
+  local tarball="${RUNTIME_VERSION}-${arch}-apple-darwin-install_only_stripped.tar.gz"
   local url="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/${tarball}"
-  local tmp wheelhouse site
-  local platform
+  local tmp wheelhouse stage site platform pack
 
   case "$arch" in
     aarch64) platform="macosx_11_0_arm64" ;;
@@ -37,23 +54,20 @@ install_runtime_for_arch() {
     *) echo "Unsupported arch: $arch" >&2; return 1 ;;
   esac
 
-  echo "Embedding macOS runtime for $arch…"
+  echo "Building bundled runtime pack for $arch…"
   tmp="$(mktemp -d)"
   wheelhouse="$tmp/wheels"
-  mkdir -p "$wheelhouse" "$dest"
+  stage="$tmp/stage"
+  mkdir -p "$wheelhouse" "$stage"
 
   curl -fL --retry 3 --retry-delay 2 -o "$tmp/$tarball" "$url"
-  rm -rf "$dest"
-  mkdir -p "$dest"
-  tar -xzf "$tmp/$tarball" -C "$dest"
-  # Expect $dest/python/...
-  if [[ ! -x "$dest/python/bin/python3" ]]; then
-    echo "Missing embedded python for $arch" >&2
+  tar -xzf "$tmp/$tarball" -C "$stage"
+  if [[ ! -x "$stage/python/bin/python3" ]]; then
+    echo "Missing python3 in stripped runtime for $arch" >&2
     rm -rf "$tmp"
     return 1
   fi
 
-  # Download macOS wheels on this host, then unpack into the embedded site-packages.
   python3 -m pip download \
     -r "$ROOT/requirements-macos.txt" \
     -d "$wheelhouse" \
@@ -63,29 +77,36 @@ install_runtime_for_arch() {
     --implementation cp \
     --abi cp312
 
-  site="$(echo "$dest"/python/lib/python3.*/site-packages)"
+  site="$stage/python/lib/python3.12/site-packages"
   mkdir -p "$site"
-  # Cross-unpack macOS wheels on Linux (pip refuses foreign platform tags).
   for whl in "$wheelhouse"/*.whl; do
     unzip -o -q "$whl" -d "$site"
   done
-  # Drop pip/wheel metadata caches that are not needed at runtime.
-  find "$site" -type d -name '__pycache__' -prune -exec rm -rf {} +
 
-  printf '%s\n' "$RUNTIME_VERSION" > "$dest/version"
+  trim_runtime "$stage/python"
+  printf '%s\n' "$RUNTIME_VERSION" > "$stage/version"
+
+  pack="$PACKS/${arch}.tar.gz"
+  tar -czf "$pack" -C "$stage" python version
   rm -rf "$tmp"
-  echo "Embedded runtime ready: $dest"
+  echo "Wrote $pack ($(du -h "$pack" | awk '{print $1}'))"
 }
 
-# Embed both Apple Silicon and Intel runtimes when network is available.
-if [[ "${SKIP_EMBED_RUNTIME:-}" != "1" ]]; then
-  rm -rf "$RESOURCES/runtime"
-  mkdir -p "$RESOURCES/runtime"
-  install_runtime_for_arch aarch64
-  install_runtime_for_arch x86_64
-else
-  echo "SKIP_EMBED_RUNTIME=1 — app will download runtime on first Mac launch."
-fi
+# Runtime packs are required — the app must not depend on external downloads.
+rm -rf "$PACKS"
+mkdir -p "$PACKS"
+build_pack_for_arch aarch64
+build_pack_for_arch x86_64
+
+# Also expand into Resources/runtime for machines that can write inside the bundle.
+# The launcher prefers these paths when present; otherwise it extracts the packs
+# into Application Support (still from files shipped inside the .app).
+rm -rf "$RESOURCES/runtime"
+mkdir -p "$RESOURCES/runtime"
+for arch in aarch64 x86_64; do
+  mkdir -p "$RESOURCES/runtime/$arch"
+  tar -xzf "$PACKS/${arch}.tar.gz" -C "$RESOURCES/runtime/$arch"
+done
 
 cat > "$CONTENTS/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -107,9 +128,9 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.3.0</string>
+	<string>1.4.0</string>
 	<key>CFBundleVersion</key>
-	<string>3</string>
+	<string>4</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.music</string>
 	<key>LSMinimumSystemVersion</key>
@@ -124,23 +145,20 @@ PLIST
 
 cat > "$MACOS/AlbumArtistCleaner" <<'LAUNCHER'
 #!/bin/bash
+# Self-contained launcher. Uses only the runtime shipped inside this .app.
+# Does not require Homebrew, system Python, Tk, or an internet connection.
 set -euo pipefail
 
 APP_NAME="Album Artist Cleaner"
 RUNTIME_VERSION="cpython-3.12.13+20260728"
-PBS_TAG="20260728"
-
-notify() {
-  local message="$1"
-  osascript -e "display notification \"$(printf '%s' "$message" | sed 's/"/\\"/g')\" with title \"$APP_NAME\"" \
-    >/dev/null 2>&1 || true
-}
 
 abort() {
   local message="$1"
   local escaped
   escaped="$(printf '%s' "$message" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-  osascript -e "display alert \"$APP_NAME\" message \"$escaped\" as critical" >/dev/null 2>&1 || true
+  if command -v osascript >/dev/null 2>&1; then
+    osascript -e "display alert \"$APP_NAME\" message \"$escaped\" as critical" >/dev/null 2>&1 || true
+  fi
   echo "$message" >&2
   exit 1
 }
@@ -174,60 +192,51 @@ echo "---- $(date) ----"
 echo "Arch: $(uname -m)"
 
 ARCH="$(arch_key)"
-BUNDLED="$RESOURCES/runtime/$ARCH"
-BUNDLED_PYTHON="$BUNDLED/python/bin/python3"
-FALLBACK="$SUPPORT/runtime"
-FALLBACK_PYTHON="$FALLBACK/python/bin/python3"
+BUNDLED_DIR="$RESOURCES/runtime/$ARCH"
+BUNDLED_PYTHON="$BUNDLED_DIR/python/bin/python3"
+PACK="$RESOURCES/runtime-packs/${ARCH}.tar.gz"
+EXTRACTED_DIR="$SUPPORT/runtime/$ARCH"
+EXTRACTED_PYTHON="$EXTRACTED_DIR/python/bin/python3"
 
 PYTHON_BIN=""
 PYTHON_HOME=""
 
 if [[ -x "$BUNDLED_PYTHON" ]] && deps_ok "$BUNDLED_PYTHON"; then
   PYTHON_BIN="$BUNDLED_PYTHON"
-  PYTHON_HOME="$BUNDLED/python"
-  echo "Using bundled runtime: $PYTHON_BIN"
-elif [[ -x "$FALLBACK_PYTHON" && -f "$FALLBACK/version" && "$(cat "$FALLBACK/version")" == "$RUNTIME_VERSION" ]] \
-  && deps_ok "$FALLBACK_PYTHON"; then
-  PYTHON_BIN="$FALLBACK_PYTHON"
-  PYTHON_HOME="$FALLBACK/python"
-  echo "Using cached runtime: $PYTHON_BIN"
+  PYTHON_HOME="$BUNDLED_DIR/python"
+  echo "Using in-bundle runtime: $PYTHON_BIN"
+elif [[ -x "$EXTRACTED_PYTHON" && -f "$EXTRACTED_DIR/version" && "$(cat "$EXTRACTED_DIR/version")" == "$RUNTIME_VERSION" ]] \
+  && deps_ok "$EXTRACTED_PYTHON"; then
+  PYTHON_BIN="$EXTRACTED_PYTHON"
+  PYTHON_HOME="$EXTRACTED_DIR/python"
+  echo "Using extracted bundled runtime: $PYTHON_BIN"
 else
-  # One-time download using only built-in macOS tools (no Homebrew/Python needed).
-  local_arch="$ARCH"
-  tarball="${RUNTIME_VERSION}-${local_arch}-apple-darwin-install_only.tar.gz"
-  url="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/${tarball}"
-  tmp="$(mktemp -d /tmp/album-artist-cleaner.XXXXXX)"
+  if [[ ! -f "$PACK" ]]; then
+    abort "This app is missing its built-in runtime pack:
 
-  notify "First launch setup — downloading built-in runtime…"
-  echo "Downloading $url"
-  if ! /usr/bin/curl -fL --retry 3 --retry-delay 2 -o "$tmp/$tarball" "$url"; then
-    rm -rf "$tmp"
-    abort "Could not download the built-in runtime.
+$PACK
 
-An internet connection is needed the first time only.
-You do not need to install Python, Homebrew, or Tk."
+Rebuild with:
+  ./scripts/build_macos_app.sh
+
+The app is meant to be fully self-contained and does not use system Python."
   fi
 
-  rm -rf "$FALLBACK"
-  mkdir -p "$FALLBACK"
-  /usr/bin/tar -xzf "$tmp/$tarball" -C "$FALLBACK"
-  rm -rf "$tmp"
-
-  if [[ ! -x "$FALLBACK_PYTHON" ]]; then
-    abort "Runtime download succeeded but python3 was missing."
+  echo "Extracting bundled runtime pack for $ARCH"
+  rm -rf "$EXTRACTED_DIR"
+  mkdir -p "$EXTRACTED_DIR"
+  if ! /usr/bin/tar -xzf "$PACK" -C "$EXTRACTED_DIR"; then
+    abort "Could not extract the built-in runtime from the app bundle."
   fi
-
-  notify "Installing app components…"
-  "$FALLBACK_PYTHON" -m pip install --upgrade pip
-  "$FALLBACK_PYTHON" -m pip install -r "$RESOURCES/requirements-macos.txt"
-  printf '%s\n' "$RUNTIME_VERSION" > "$FALLBACK/version"
-
-  PYTHON_BIN="$FALLBACK_PYTHON"
-  PYTHON_HOME="$FALLBACK/python"
-  notify "Setup complete"
+  if [[ ! -x "$EXTRACTED_PYTHON" ]] || ! deps_ok "$EXTRACTED_PYTHON"; then
+    abort "The built-in runtime is incomplete or corrupted.
+Please rebuild the app with ./scripts/build_macos_app.sh"
+  fi
+  PYTHON_BIN="$EXTRACTED_PYTHON"
+  PYTHON_HOME="$EXTRACTED_DIR/python"
 fi
 
-# Clean up obsolete system-python env from older app versions.
+# Remove leftovers from older versions that used system Python.
 rm -rf "$SUPPORT/venv" "$SUPPORT/venv-python" 2>/dev/null || true
 
 cd "$RESOURCES"
@@ -241,11 +250,7 @@ LAUNCHER
 chmod +x "$MACOS/AlbumArtistCleaner"
 printf 'APPL????' > "$CONTENTS/PkgInfo"
 
-# Ignore bulky embedded runtimes in git status helpers (actual ignore in .gitignore).
 echo "Built: $APP"
-if [[ -d "$RESOURCES/runtime" ]]; then
-  echo "Embedded runtimes: $(du -sh "$RESOURCES/runtime" | awk '{print $1}')"
-  echo "App is ready to open on a Mac with nothing else installed."
-else
-  echo "No embedded runtime — first Mac launch will download one automatically."
-fi
+echo "Runtime packs: $(du -sh "$PACKS" | awk '{print $1}')"
+echo "Full app size: $(du -sh "$APP" | awk '{print $1}')"
+echo "Self-contained: no Homebrew, system Python, Tk, or internet required to run."

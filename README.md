@@ -1,6 +1,9 @@
 # Album Artist Cleaner
 
-A **self-contained macOS application** — no Homebrew, Python, or Tk install required.
+A **fully self-contained macOS application**.  
+It does **not** depend on Homebrew, system Python, Tk, or any other software you install.
+
+Everything needed to run is built into `Album Artist Cleaner.app`.
 
 It scans a music library folder structured as:
 
@@ -23,6 +26,8 @@ Artist/
 
 ## Install
 
+Build the self-contained app (this step downloads the private runtime **into the app bundle** — only needed when building):
+
 ```bash
 chmod +x scripts/build_macos_app.sh
 ./scripts/build_macos_app.sh
@@ -30,7 +35,11 @@ chmod +x scripts/build_macos_app.sh
 
 Then double-click **`Album Artist Cleaner.app`** (or drag it to Applications).
 
-That’s it. The app ships with its own runtime (or downloads one automatically on first launch using only built-in macOS tools). You do **not** install Python, Homebrew, or Tk.
+After it’s built, opening the app needs:
+- no Python install
+- no Homebrew
+- no Tk / `python-tk`
+- no internet connection
 
 If macOS blocks the app: right-click → **Open** → **Open**.
 
