@@ -1,0 +1,4 @@
+{
+  "name": "music-sort",
+  "install": "./.cursor/install.sh"
+}
