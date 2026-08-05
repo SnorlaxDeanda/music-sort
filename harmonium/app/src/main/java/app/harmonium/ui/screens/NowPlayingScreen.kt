@@ -188,7 +188,12 @@ private fun PlayingPage(
         Spacer(Modifier.height(24.dp))
         Text(trackTitle, style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
         Text(
-            "$artist — $album",
+            buildString {
+                append(artist)
+                append(" — ")
+                append(album)
+                if (state.currentIsOffline) append(" · Offline")
+            },
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,

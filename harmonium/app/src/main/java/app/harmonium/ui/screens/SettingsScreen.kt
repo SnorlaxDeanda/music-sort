@@ -3,6 +3,7 @@ package app.harmonium.ui.screens
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -15,20 +16,22 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.layout.Row
-import androidx.compose.ui.Alignment
+import app.harmonium.data.cache.OfflineCacheUiState
 
 @Composable
 fun SettingsScreen(
+    offlineCache: OfflineCacheUiState,
     onOpenEqualizer: () -> Unit,
     onOpenQueues: () -> Unit,
     onOpenProviders: () -> Unit,
+    onOpenOfflineCache: () -> Unit,
+    onTogglePlaybackCache: (Boolean) -> Unit,
 ) {
     var gapless by rememberSaveable { mutableStateOf(true) }
     var replayGain by rememberSaveable { mutableStateOf(true) }
-    var offlineCache by rememberSaveable { mutableStateOf(true) }
     var smartFades by rememberSaveable { mutableStateOf(false) }
     var skipSilence by rememberSaveable { mutableStateOf(false) }
 
@@ -47,6 +50,11 @@ fun SettingsScreen(
             SettingsLink("Equalizer & AutoEQ", "GEQ bands and headphone presets", onOpenEqualizer)
             SettingsLink("Media queues", "Switch music / audiobook queues", onOpenQueues)
             SettingsLink("Providers", "Servers, NAS, cloud, local", onOpenProviders)
+            SettingsLink(
+                title = "Offline cache",
+                subtitle = "${formatBytes(offlineCache.stats.totalBytes)} · ${offlineCache.stats.totalCount} tracks cached",
+                onClick = onOpenOfflineCache,
+            )
         }
         item {
             Text(
@@ -65,9 +73,13 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.headlineMedium,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
             )
-            SettingsToggle("Playback cache", offlineCache) { offlineCache = it }
+            SettingsToggle(
+                title = "Playback cache",
+                checked = offlineCache.settings.playbackCacheEnabled,
+                onChecked = onTogglePlaybackCache,
+            )
             Text(
-                "Manual downloads and rolling cache hooks are scaffolded for the next iteration.",
+                "Prefetches the current track and look-ahead into rolling cache. Open Offline cache for limits, pins, and downloads.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
@@ -80,7 +92,7 @@ fun SettingsScreen(
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
             )
             Text(
-                "Harmonium 0.1.0 — an open-source, Symfonium-inspired Android music player. Not affiliated with Symfonium.",
+                "Harmonium 0.2.0 — an open-source, Symfonium-inspired Android music player. Not affiliated with Symfonium.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 20.dp),

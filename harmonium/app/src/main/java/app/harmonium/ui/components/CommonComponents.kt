@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -135,6 +137,8 @@ fun TrackRow(
     track: Track,
     onClick: () -> Unit,
     trailing: String? = track.durationLabel(),
+    offline: Boolean = false,
+    onDownload: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -158,12 +162,27 @@ fun TrackRow(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                "${track.artistName} · ${track.albumTitle}",
+                buildString {
+                    append(track.artistName)
+                    append(" · ")
+                    append(track.albumTitle)
+                    if (offline) append(" · Offline")
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+        if (onDownload != null) {
+            IconButton(onClick = onDownload) {
+                Icon(
+                    imageVector = if (offline) Icons.Default.DownloadDone else Icons.Default.Download,
+                    contentDescription = if (offline) "Cached" else "Download",
+                    tint = if (offline) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         if (trailing != null) {
             Text(

@@ -10,6 +10,7 @@ object Routes {
     const val EQUALIZER = "equalizer"
     const val QUEUES = "queues"
     const val AUDIOBOOKS = "audiobooks"
+    const val OFFLINE_CACHE = "offline_cache"
     const val ALBUM = "album/{albumId}"
     const val ARTIST = "artist/{artistId}"
 

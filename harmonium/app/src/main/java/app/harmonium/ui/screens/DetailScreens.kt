@@ -2,12 +2,14 @@ package app.harmonium.ui.screens
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -16,6 +18,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -35,9 +38,12 @@ import app.harmonium.ui.components.TrackRow
 fun AlbumScreen(
     album: Album?,
     tracks: List<Track>,
+    isCached: (String) -> Boolean,
     onBack: () -> Unit,
     onPlayAlbum: () -> Unit,
+    onDownloadAlbum: () -> Unit,
     onPlayTrack: (Track) -> Unit,
+    onDownloadTrack: (Track) -> Unit,
 ) {
     if (album == null) {
         EmptyState("Album missing", "This album is no longer in the library.")
@@ -72,16 +78,20 @@ fun AlbumScreen(
                 modifier = Modifier.padding(horizontal = 20.dp),
             )
             Spacer(Modifier.height(12.dp))
-            Button(
-                onClick = onPlayAlbum,
-                modifier = Modifier.padding(horizontal = 20.dp),
-            ) {
-                Text("Play album")
+            Row(modifier = Modifier.padding(horizontal = 20.dp)) {
+                Button(onClick = onPlayAlbum) { Text("Play album") }
+                Spacer(Modifier.width(10.dp))
+                OutlinedButton(onClick = onDownloadAlbum) { Text("Download") }
             }
             Spacer(Modifier.height(8.dp))
         }
         items(tracks, key = { it.id }) { track ->
-            TrackRow(track, onClick = { onPlayTrack(track) })
+            TrackRow(
+                track = track,
+                onClick = { onPlayTrack(track) },
+                offline = isCached(track.id),
+                onDownload = { onDownloadTrack(track) },
+            )
         }
     }
 }

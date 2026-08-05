@@ -45,6 +45,7 @@ import app.harmonium.ui.screens.EqualizerScreen
 import app.harmonium.ui.screens.HomeScreen
 import app.harmonium.ui.screens.LibraryScreen
 import app.harmonium.ui.screens.NowPlayingScreen
+import app.harmonium.ui.screens.OfflineCacheScreen
 import app.harmonium.ui.screens.ProvidersScreen
 import app.harmonium.ui.screens.QueuesScreen
 import app.harmonium.ui.screens.SearchScreen
@@ -60,7 +61,11 @@ class MainActivity : ComponentActivity() {
         setContent {
             HarmoniumTheme {
                 val vm: AppViewModel = viewModel(
-                    factory = AppViewModel.Factory(app.libraryRepository, app.playerController),
+                    factory = AppViewModel.Factory(
+                        app.libraryRepository,
+                        app.playerController,
+                        app.offlineCache,
+                    ),
                 )
                 HarmoniumRoot(vm)
             }
@@ -93,6 +98,7 @@ private fun HarmoniumRoot(vm: AppViewModel) {
     val activeEq by vm.activeEqId.collectAsStateWithLifecycle()
     val queues by vm.queues.collectAsStateWithLifecycle()
     val activeQueue by vm.activeQueueId.collectAsStateWithLifecycle()
+    val offlineCache by vm.offlineCacheState.collectAsStateWithLifecycle()
 
     val bottom = listOf(
         Dest(Routes.HOME, "Home", Icons.Default.Home),
@@ -185,9 +191,26 @@ private fun HarmoniumRoot(vm: AppViewModel) {
                 }
                 composable(Routes.SETTINGS) {
                     SettingsScreen(
+                        offlineCache = offlineCache,
                         onOpenEqualizer = { navController.navigate(Routes.EQUALIZER) },
                         onOpenQueues = { navController.navigate(Routes.QUEUES) },
                         onOpenProviders = { navController.navigate(Routes.PROVIDERS) },
+                        onOpenOfflineCache = { navController.navigate(Routes.OFFLINE_CACHE) },
+                        onTogglePlaybackCache = { enabled ->
+                            vm.updateCacheSettings { it.copy(playbackCacheEnabled = enabled) }
+                        },
+                    )
+                }
+                composable(Routes.OFFLINE_CACHE) {
+                    OfflineCacheScreen(
+                        state = offlineCache,
+                        onBack = { navController.popBackStack() },
+                        onUpdateSettings = vm::updateCacheSettings,
+                        onRemove = vm::removeCachedTrack,
+                        onPin = vm::pinCachedTrack,
+                        onUnpin = vm::unpinCachedTrack,
+                        onClearRolling = vm::clearRollingCache,
+                        onClearAll = vm::clearAllCache,
                     )
                 }
                 composable(Routes.NOW_PLAYING) {
@@ -235,11 +258,14 @@ private fun HarmoniumRoot(vm: AppViewModel) {
                     AlbumScreen(
                         album = vm.album(albumId),
                         tracks = vm.tracksForAlbum(albumId),
+                        isCached = vm::isCached,
                         onBack = { navController.popBackStack() },
                         onPlayAlbum = { vm.playAlbum(albumId) },
+                        onDownloadAlbum = { vm.downloadAlbum(albumId) },
                         onPlayTrack = { track ->
                             vm.playTrack(track, vm.tracksForAlbum(albumId))
                         },
+                        onDownloadTrack = vm::downloadTrack,
                     )
                 }
                 composable(Routes.ARTIST) { entry ->

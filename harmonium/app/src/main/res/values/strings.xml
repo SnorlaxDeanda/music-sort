@@ -11,4 +11,6 @@
     <string name="audiobooks">Audiobooks</string>
     <string name="queues">Queues</string>
     <string name="lyrics">Lyrics</string>
+    <string name="offline_cache">Offline cache</string>
+    <string name="download">Download</string>
 </resources>

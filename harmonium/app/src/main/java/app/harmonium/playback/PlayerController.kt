@@ -7,6 +7,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import app.harmonium.data.cache.OfflineCacheRepository
 import app.harmonium.data.model.MediaKind
 import app.harmonium.data.model.PlaybackQueue
 import app.harmonium.data.model.RepeatMode
@@ -29,11 +30,13 @@ data class PlayerUiState(
     val repeatMode: RepeatMode = RepeatMode.OFF,
     val playbackSpeed: Float = 1f,
     val kind: MediaKind = MediaKind.MUSIC,
+    val currentIsOffline: Boolean = false,
 )
 
 class PlayerController(
     context: Context,
     private val repository: LibraryRepository,
+    private val offlineCache: OfflineCacheRepository,
 ) {
     private val appContext = context.applicationContext
     private var controller: MediaController? = null
@@ -53,9 +56,12 @@ class PlayerController(
                 it.copy(
                     current = track,
                     durationMs = track?.durationMs ?: controller?.duration?.coerceAtLeast(0) ?: 0,
+                    currentIsOffline = trackId?.let { offlineCache.isCached(it) } == true,
                 )
             }
             persistQueuePosition()
+            maybeWarmCache()
+            track?.let { offlineCache.autoCacheIfNeeded(it) }
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -111,23 +117,28 @@ class PlayerController(
         repository.updateQueue(updated)
 
         val items = tracks.map { it.toMediaItem() }
-        c.setMediaItems(items, startIndex.coerceIn(0, items.lastIndex), 0L)
+        val safeIndex = startIndex.coerceIn(0, items.lastIndex)
+        c.setMediaItems(items, safeIndex, 0L)
         c.prepare()
         c.play()
+        val current = tracks.getOrNull(safeIndex)
         _state.update {
             it.copy(
                 queue = tracks,
                 queueName = updated.name,
-                current = tracks.getOrNull(startIndex),
+                current = current,
                 kind = kind,
                 playbackSpeed = updated.playbackSpeed,
                 shuffle = updated.shuffle,
                 repeatMode = updated.repeatMode,
+                currentIsOffline = current?.let { track -> offlineCache.isCached(track.id) } == true,
             )
         }
         c.setPlaybackSpeed(updated.playbackSpeed)
         applyRepeat(updated.repeatMode)
         c.shuffleModeEnabled = updated.shuffle
+        offlineCache.ensurePlaybackCache(tracks, safeIndex)
+        current?.let { offlineCache.autoCacheIfNeeded(it) }
     }
 
     fun playPause() {
@@ -183,6 +194,13 @@ class PlayerController(
         }
     }
 
+    private fun maybeWarmCache() {
+        val queue = _state.value.queue
+        if (queue.isEmpty()) return
+        val index = controller?.currentMediaItemIndex?.coerceAtLeast(0) ?: return
+        offlineCache.ensurePlaybackCache(queue, index)
+    }
+
     private fun syncFromController(c: MediaController) {
         val track = c.currentMediaItem?.mediaId?.let { repository.trackById(it) }
         val queue = buildList {
@@ -205,6 +223,7 @@ class PlayerController(
             },
             playbackSpeed = c.playbackParameters.speed,
             kind = track?.kind ?: MediaKind.MUSIC,
+            currentIsOffline = track?.let { offlineCache.isCached(it.id) } == true,
         )
     }
 
@@ -240,7 +259,7 @@ class PlayerController(
             .build()
         return MediaItem.Builder()
             .setMediaId(id)
-            .setUri(streamUrl)
+            .setUri(offlineCache.resolvePlaybackUri(this))
             .setMediaMetadata(metadata)
             .build()
     }
