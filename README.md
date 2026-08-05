@@ -1,3 +1,16 @@
+# music-sort
+
+## Harmonium (Symfonium-inspired Android player)
+
+See [`harmonium/README.md`](harmonium/README.md) for the open-source Android music player MVP — multi-provider library, Media3 playback, EQ, audiobook queues, and a demo library.
+
+```bash
+cd harmonium
+./gradlew :app:assembleDebug
+```
+
+---
+
 # Album Artist Cleaner
 
 A **fully self-contained macOS application**.  
